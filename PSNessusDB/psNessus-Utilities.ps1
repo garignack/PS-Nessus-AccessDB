@@ -96,6 +96,26 @@ function Get-FileBytes{
 	[byte[]] $bytes = [PSNessusDB.Cutter]::GrabBytes($fileIN, $startloc, $endloc)
 	return $bytes
 }
+function Get-FileString{
+	[CmdletBinding()] param(
+		[Parameter(Mandatory=$True, HelpMessage="The File to Process")]
+		[Alias("f")]
+		[ValidateScript({Test-Path $_ })]
+		[string]$fileIN,
+		[Parameter(Mandatory=$True, HelpMessage="The Starting Byte Location")]
+		[int]$startloc,
+		[Parameter(Mandatory=$True, HelpMessage="The Ending Byte Location")]
+		[int]$endloc,
+		[ValidateSet("UTF7","UTF8","UTF32","UNICODE","ASCII", "DEFAULT")] 
+        [String]
+        $Encoding = "UTF-8"
+	)
+	begin{$enc = [System.Text.Encoding]::$Encoding}
+	process{
+	[byte[]] $bytes = [PSNessusDB.Cutter]::GrabBytes($fileIN, $startloc, $endloc)
+	return $enc.GetString($bytes)
+	}
+}
 
 function Convert-BytesToString{
 	[CmdletBinding()] param(

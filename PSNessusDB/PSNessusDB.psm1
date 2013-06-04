@@ -1,60 +1,4 @@
-﻿#######################################################################################################################
-# File:             PSNessusDB.psd1                                                                                   #
-# Author:           Garignack                                                                                         #
-# Publisher:                                                                                                          #
-# Copyright:        © 2013 . All rights reserved.                                                                     #
-# Link:            https://github.com/garignack/PS-Nessus-AccessDB                                                        #
-#######################################################################################################################
-
-function Import-PSNessusDB{
-	<# 
-	.SYNOPSIS
-		Imports a Nessus_V2 file into a Microsoft Access Database
-
-	.DESCRIPTION
-		A Powershell cmdlet that takes a Nessus_V2 file as an input and parses it into an Access Database. 
-		Accepts $Fullname parameters from the pipeline for processing multiple files at once.
-		Utilizes a multi-level logging module for configurable logging outputs
-		Supports --debug and --verbose flags for additional information		
-
-	.PARAMETER  FullName
-		Alias: f or file
-		Absolute or Relative path to Nessus File.  Accepts Pipeline Inputs
-	
-	.PARAMETER  AccessDB
-		Alias: db
-		Absolute or Relative path to PSNessusDB Access Database File
-		
-	.PARAMETER  LogFileName
-		Alias: l
-		Absolute or Relative path
-		
-	.PARAMETER  Trace
-		Enables All Logging
-		
-	.PARAMETER NoLog 
-		Disables all logging
-		
-	.EXAMPLE
-		Import-PSNessusDB -f $File -db $db -l $logFile
-	.EXAMPLE
-		Get-ChildItem -d $dir -include *.nessus -recurse -force | Import-PSNessusDB -db $db -l $logFile
-		
-	.INPUTS
-		Nessus_V2 File
-
-	.OUTPUTS
-		Microsoft Access Database
-
-	.NOTES
-		Credits:
-		Joshua Poehls (Jpoehls): https://github.com/jpoehls/hulk-example/blob/master/_posts/2013/2013-01-24-benchmarking-with-Powershell.md
-		
-
-	.LINK
-		https://github.com/garignack/PS-Nessus-AccessDB
-	#>
-
+﻿function Import-PSNessusDB{ 
 	[CmdletBinding()] 
 	param ( 
 		[parameter(Mandatory=$True, HelpMessage="The Directory of Nessus Files to Process",
@@ -262,12 +206,10 @@ function Import-PSNessusDB{
 		        if ($i -eq $hostCount -1) {
 					# If this is the final Host, we won't have an end location
 					# so we read to the end of the file
-					$hostBytes = Get-FileBytes $FullName $hostList[$i] -1
-					$hostString = Convert-BytesToString $hostBytes "UTF8"
+					$hostString = Get-FileString $FullName $hostList[$i] -1 "UTF8"
 					
 				} else {
-					$hostBytes = Get-FileBytes $FullName $hostList[$i] $hostList[($i + 1)]
-					$hostString = Convert-BytesToString $hostBytes "UTF8"
+					$hostString = Get-FileString $FullName $hostList[$i] $hostList[($i + 1)] "UTF8"
 				}
 					$hostString = $hostString.Substring(0,($hostString.Indexof("</ReportHost>")+13)) #Ensure that the string object only include the <ReportHost>...</ReportHost> information
 					$hostString = $hostString.replace("><HostProperties>"," xmlns:cm=`"http://www.nessus.org/cm`"><HostProperties>") # Add the Nessus XML Namespace back on the xml object
@@ -282,7 +224,7 @@ function Import-PSNessusDB{
 			$log.Verbose("Host Retrieval: $($sw.ElapsedMilliseconds.ToString())ms")
 	        # Process the host XML object
 	        
-	            $log.Info("Processing: $($xmlhost.ReportHost.name)")
+	            $log.Info("Processing[$($hostlist[$i])]: $($xmlhost.ReportHost.name)")
 	            & $psfile $xmlhost $accessDB $fileID
 	            
 	            $intHostsProcessed = $intHostsProcessed + 1
@@ -309,5 +251,59 @@ function Import-PSNessusDB{
 		$conn.close()
 		$conn = $null
 	}#end
+
+	<# 
+	.SYNOPSIS
+		Imports a Nessus_V2 file into a Microsoft Access Database
+
+	.DESCRIPTION
+		A Powershell cmdlet that takes a Nessus_V2 file as an input and parses it into an Access Database. 
+		Accepts $Fullname parameters from the pipeline for processing multiple files at once.
+		Utilizes a multi-level logging module for configurable logging outputs
+		Supports --debug and --verbose flags for additional information		
+
+	.PARAMETER  FullName
+		Alias: f or file
+		Absolute or Relative path to Nessus File.  Accepts Pipeline Inputs
+	
+	.PARAMETER  AccessDB
+		Alias: db
+		Absolute or Relative path to PSNessusDB Access Database File
+		
+	.PARAMETER  LogFileName
+		Alias: l
+		Absolute or Relative path
+		
+	.PARAMETER  Trace
+		Enables All Logging
+		
+	.PARAMETER NoLog 
+		Disables all logging
+		
+	.EXAMPLE
+		Single File Processing
+		$file = "C:\Path\To\Scan.nessus"
+		$db = "C:\Path\To\Scan.accdb"
+		$LogFile = "C:\Path\To\scan.log"
+		Import-PSNessusDB -f $File -db $db -l $log  
+
+		Pipeline Processing
+		$dir = "C:\Path\To"
+		Get-ChildItem -d $dir -include *.nessus -recurse -force | Import-PSNessusDB -f $file -db $db -l $log
+		
+	.INPUTS
+		Nessus_V2 File
+
+	.OUTPUTS
+		Microsoft Access Database
+
+	.NOTES
+		Credits:
+		Joshua Poehls (Jpoehls): https://github.com/jpoehls/hulk-example/blob/master/_posts/2013/2013-01-24-benchmarking-with-Powershell.md
+		
+
+	.LINK
+		https://github.com/garignack/PS-Nessus-AccessDB
+	#>
 
 }
