@@ -11,16 +11,17 @@ namespace PSNessusDB
 		//Implements Boyd-Moyer-HorsePool Algorithm
 		//Adapted from http://aspdotnetcodebook.blogspot.com/2013/04/boyer-moore-search-algorithm.html
 		
-		public static List<int> SearchBytePattern(byte[] pattern, string FILE_NAME, int bufferSize = 65536)
+		public static List<int> SearchBytePattern(byte[] pattern, string FILE_NAME)
         {
+			int bufferSize = 65536;
             byte[] needle = pattern;
             if (needle.Length > bufferSize) {bufferSize = needle.Length * 2;}
             byte[] haystack = new byte[bufferSize];
             
             List<int> matches = new List<int>();
-            using (FileStream r = new FileStream(FILE_NAME, FileMode.Open, FileAccess.Read))
+            using (FileStream fs = new FileStream(FILE_NAME, FileMode.Open, FileAccess.Read))
             {
-                int numBytesToRead = (int)r.Length;
+                int numBytesToRead = (int)fs.Length;
                 if (needle.Length > numBytesToRead)
                 {
                         return matches;
@@ -29,13 +30,13 @@ namespace PSNessusDB
 
                 while (numBytesToRead > 0)
                 {
-                    int pos = (int)r.Position;
-                    int n = r.Read(haystack, 0, bufferSize);
+                    int pos = (int)fs.Position;
+                    int n = fs.Read(haystack, 0, bufferSize);
                     if (n == 0) { break; }
                     while (needle.Length > n)
                     {
                         byte[] buffer = new byte[bufferSize - n];
-                        int o = r.Read(buffer, 0, buffer.Length);
+                        int o = fs.Read(buffer, 0, buffer.Length);
                         if (o == 0) { break; }
                         haystack.CopyTo(buffer, n);
                         n = n + o;
@@ -60,7 +61,7 @@ namespace PSNessusDB
                         if (offset + last > haystack.Length - 1) { break; }
                         offset += badShift[(int)haystack[offset + last]];
                     }
-                    r.Position = pos + n - needle.Length;
+                    fs.Position = pos + n - needle.Length;
                 }
             }
             return matches;
@@ -84,16 +85,16 @@ namespace PSNessusDB
 		public static byte[] GrabBytes(string FILE_NAME, int locStart, int locEnd)
         {
 			byte[] buffer;
-		    using (FileStream r = new FileStream(FILE_NAME, FileMode.Open, FileAccess.Read))
+		    using (FileStream fs = new FileStream(FILE_NAME, FileMode.Open, FileAccess.Read))
 			{
-					int maxSize = (int)r.Length;
+					int maxSize = (int)fs.Length;
 					if (locEnd == -1 || locEnd > maxSize ){locEnd = maxSize;}
 					if (locStart < 0) {locStart = 0;}
 			
 			int length = locEnd - locStart;
 			buffer = new byte[length];
-			r.Seek(locStart, SeekOrigin.Begin);
-			r.Read(buffer, 0, length);
+			fs.Seek(locStart, SeekOrigin.Begin);
+			fs.Read(buffer, 0, length);
             }			
 			return buffer;
 			
