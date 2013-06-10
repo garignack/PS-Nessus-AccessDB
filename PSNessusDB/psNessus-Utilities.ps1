@@ -8,37 +8,79 @@ namespace PSNessusDB
 { 
     public class Cutter 
     { 
-		public static List<int> SearchBytePattern(byte[] pattern, string FILE_NAME)
+		//Implements Boyd-Moyer-HorsePool Algorithm
+		//Adapted from http://aspdotnetcodebook.blogspot.com/2013/04/boyer-moore-search-algorithm.html
+		
+		public static List<int> SearchBytePattern(byte[] pattern, string FILE_NAME, int bufferSize = 65536)
         {
-			List<int> matches = new List<int>();
-		    using (FileStream r = new FileStream(FILE_NAME, FileMode.Open, FileAccess.Read))
-			{
-					// precomputing this shaves some seconds from the loop execution
-					int maxloop = (int)r.Length - (int)pattern.Length;
-					for (int i = 0; i < maxloop; i++)
-					{
-						if (pattern[0] == r.ReadByte())
-						{
-							bool ismatch = true;
-							for (int j = 1; j < pattern.Length; j++)
-							{
-								if (r.ReadByte() != pattern[j])
-								{
-									ismatch = false;
-									r.Position = i + 1 ;
-									break;
-								}
-							}
-							if (ismatch)
-							{
-								matches.Add(i);
-								i += pattern.Length - 1;
-							}
-						}
-					}
-			}
+            byte[] needle = pattern;
+            if (needle.Length > bufferSize) {bufferSize = needle.Length * 2;}
+            byte[] haystack = new byte[bufferSize];
+            
+            List<int> matches = new List<int>();
+            using (FileStream r = new FileStream(FILE_NAME, FileMode.Open, FileAccess.Read))
+            {
+                int numBytesToRead = (int)r.Length;
+                if (needle.Length > numBytesToRead)
+                {
+                        return matches;
+                }
+                int[] badShift = BuildBadCharTable(needle);
+
+                while (numBytesToRead > 0)
+                {
+                    int pos = (int)r.Position;
+                    int n = r.Read(haystack, 0, bufferSize);
+                    if (n == 0) { break; }
+                    while (needle.Length > n)
+                    {
+                        byte[] buffer = new byte[bufferSize - n];
+                        int o = r.Read(buffer, 0, buffer.Length);
+                        if (o == 0) { break; }
+                        haystack.CopyTo(buffer, n);
+                        n = n + o;
+                    }
+                    numBytesToRead = numBytesToRead - n;
+                    int offset = 0;
+                    int scan = 0;
+                    int last = needle.Length - 1;
+                    int maxoffset = haystack.Length - needle.Length;
+                    while (offset <= maxoffset)
+                    {
+                        for (scan = last; (needle[scan] == haystack[scan + offset]); scan--)
+                        {
+                            if (scan == 0)
+                            { //Match found
+                                int i = pos + offset;
+                                matches.Add(i);
+                                offset++;
+                                break;
+                            }
+                        }
+                        if (offset + last > haystack.Length - 1) { break; }
+                        offset += badShift[(int)haystack[offset + last]];
+                    }
+                    r.Position = pos + n - needle.Length;
+                }
+            }
             return matches;
         }
+		
+		private static int[] BuildBadCharTable(byte[] needle)
+        {
+            int[] badShift = new int[256];
+            for (int i = 0; i < 256; i++)
+            {
+                badShift[i] = needle.Length;
+            }
+            int last = needle.Length - 1;
+            for (int i = 0; i < last; i++)
+            {
+                badShift[(int)needle[i]] = last - i;
+            }
+            return badShift;
+        }
+		
 		public static byte[] GrabBytes(string FILE_NAME, int locStart, int locEnd)
         {
 			byte[] buffer;
