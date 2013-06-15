@@ -26,7 +26,7 @@
 	)
 	# Setup Processing Environment.  
 	# If multiple files are passed from the pipeline, this will only be invoked once.
-	# http://ss64.com/ps/syntax-function-input.html
+
 	BEGIN{
 		$scriptPath = $PSScriptRoot
 		$AccessDB = resolve-path $AccessDB

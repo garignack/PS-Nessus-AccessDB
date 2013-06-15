@@ -85,7 +85,8 @@ ReportItem - Specfic finding information per host.
 	.NOTES
 		Credits:
 		Joshua Poehls (Jpoehls): https://github.com/jpoehls/hulk-example/blob/master/_posts/2013/2013-01-24-benchmarking-with-Powershell.md
-		
+		Hemanth.D:  http://sqlchow.wordpress.com/2012/08/06/creating-a-logging-framework-in-powershell-the-final-part/ 
+		SANTOSH: http://aspdotnetcodebook.blogspot.com/2013/04/boyer-moore-search-algorithm.html
 
 	.LINK
 		https://github.com/garignack/PS-Nessus-AccessDB

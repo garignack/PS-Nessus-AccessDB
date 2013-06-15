@@ -174,3 +174,5 @@ function Convert-BytesToString{
 	process{return $enc.GetString($bytes)}
 	end{}
 }
+
+Load-FileCutter
