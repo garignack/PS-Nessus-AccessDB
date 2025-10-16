@@ -68,7 +68,7 @@ function Add-PSNessusHostRecord {
                 }
                 if ($preserveTags -contains $tagName.ToLowerInvariant()) {
                     $hostColumns += $tagName
-                    $hostValues += (ConvertTo-PSNessusDbValue -Value $tagValue)
+                    $hostValues += (ConvertTo-PSNessusDbValue -Value $tagValue -Provider $DbContext.Provider)
                 }
                 else {
                     $hostTags += [pscustomobject]@{
@@ -101,7 +101,7 @@ function Add-PSNessusHostRecord {
             $values  = @(
                 $hostId,
                 $tag.Name,
-                (ConvertTo-PSNessusDbValue -Value $tag.Value)
+                (ConvertTo-PSNessusDbValue -Value $tag.Value -Provider $DbContext.Provider)
             )
             Add-PSNessusDbRecord -Context $DbContext -Table 'HostTags' -Columns $columns -Values $values | Out-Null
         }
@@ -144,11 +144,11 @@ function Add-PSNessusHostRecord {
                 switch -Wildcard ($attribute.name) {
                     'plugin*' {
                         $pluginColumns += $attribute.name
-                        $pluginValues += (ConvertTo-PSNessusDbValue -Value ([string]$attribute.'#text'))
+                        $pluginValues += (ConvertTo-PSNessusDbValue -Value ([string]$attribute.'#text') -Provider $DbContext.Provider)
                     }
                     default {
                         $reportColumns += $attribute.name
-                        $reportValues += (ConvertTo-PSNessusDbValue -Value ([string]$attribute.'#text'))
+                        $reportValues += (ConvertTo-PSNessusDbValue -Value ([string]$attribute.'#text') -Provider $DbContext.Provider)
                     }
                 }
             }
@@ -157,25 +157,25 @@ function Add-PSNessusHostRecord {
                 switch -Wildcard ($child.name) {
                     'plugin_output' {
                         $reportColumns += $child.name
-                        $reportValues += (ConvertTo-PSNessusDbValue -Value ([string]$child.'#text'))
+                        $reportValues += (ConvertTo-PSNessusDbValue -Value ([string]$child.'#text') -Provider $DbContext.Provider)
                     }
                     'cm:compliance-result' {
                         $reportColumns += $child.name
-                        $reportValues += (ConvertTo-PSNessusDbValue -Value ([string]$child.'#text'))
+                        $reportValues += (ConvertTo-PSNessusDbValue -Value ([string]$child.'#text') -Provider $DbContext.Provider)
                     }
                     'cm:compliance-actual-value' {
                         $reportColumns += $child.name
-                        $reportValues += (ConvertTo-PSNessusDbValue -Value ([string]$child.'#text'))
+                        $reportValues += (ConvertTo-PSNessusDbValue -Value ([string]$child.'#text') -Provider $DbContext.Provider)
                     }
                     default {
                         if ($pluginColumns -notcontains $child.name) {
                             $pluginColumns += $child.name
-                            $pluginValues += (ConvertTo-PSNessusDbValue -Value ([string]$child.'#text'))
+                            $pluginValues += (ConvertTo-PSNessusDbValue -Value ([string]$child.'#text') -Provider $DbContext.Provider)
                         }
                         else {
                             for ($index = 0; $index -lt $pluginColumns.Count; $index++) {
                                 if ($pluginColumns[$index] -eq $child.name) {
-                                    $pluginValues[$index] += ';' + (ConvertTo-PSNessusDbValue -Value ([string]$child.'#text'))
+                                    $pluginValues[$index] += ';' + (ConvertTo-PSNessusDbValue -Value ([string]$child.'#text') -Provider $DbContext.Provider)
                                 }
                             }
                         }
@@ -197,24 +197,24 @@ function Add-PSNessusHostRecord {
                     'plugin*' { }
                     default {
                         $reportColumns += $attribute.name
-                        $reportValues += (ConvertTo-PSNessusDbValue -Value ([string]$attribute.'#text'))
+                        $reportValues += (ConvertTo-PSNessusDbValue -Value ([string]$attribute.'#text') -Provider $DbContext.Provider)
                     }
                 }
             }
 
             if ($reportItem.plugin_output) {
                 $reportColumns += 'plugin_output'
-                $reportValues += (ConvertTo-PSNessusDbValue -Value ([string]$reportItem.plugin_output))
+                $reportValues += (ConvertTo-PSNessusDbValue -Value ([string]$reportItem.plugin_output) -Provider $DbContext.Provider)
             }
 
             if ($reportItem.'cm:compliance-result') {
                 $reportColumns += 'cm:compliance-result'
-                $reportValues += (ConvertTo-PSNessusDbValue -Value ([string]$reportItem.'cm:compliance-result'))
+                $reportValues += (ConvertTo-PSNessusDbValue -Value ([string]$reportItem.'cm:compliance-result') -Provider $DbContext.Provider)
             }
 
             if ($reportItem.'cm:compliance-actual-value') {
                 $reportColumns += 'cm:compliance-actual-value'
-                $reportValues += (ConvertTo-PSNessusDbValue -Value ([string]$reportItem.'cm:compliance-actual-value'))
+                $reportValues += (ConvertTo-PSNessusDbValue -Value ([string]$reportItem.'cm:compliance-actual-value') -Provider $DbContext.Provider)
             }
         }
 

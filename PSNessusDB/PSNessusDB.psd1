@@ -62,6 +62,7 @@ FormatsToProcess = @()
 # ModuleToProcess
 NestedModules = @(
     '.\PS-Log.psm1'
+    '.\PS-Sqlite.psm1'
 )
 
 # Functions to export from this module
@@ -84,6 +85,7 @@ FileList = @(
     '.\PSNessusDB.psm1'
     '.\PSNessusDB.psd1'
     '.\PS-Log.psm1'
+    '.\PS-Sqlite.psm1'
     '.\Public\Import-PSNessusDB.ps1'
     '.\Public\Export-PSNessusReportMatrix.ps1'
     '.\Private\Add-PSNessusHostRecord.ps1'
@@ -97,6 +99,10 @@ FileList = @(
     '.\PS-Log\Public\Get-ScriptInfo.ps1'
     '.\PS-Log\Public\Switch-LogFile.ps1'
     '.\PS-Log\Public\New-LogFile.ps1'
+    '.\PS-Sqlite\Private\Initialize-PSNessusSqliteEnvironment.ps1'
+    '.\PS-Sqlite\Public\PSNessusSqliteCommands.ps1'
+    '.\PS-Sqlite\Lib\System.Data.SQLite.dll'
+    '.\PS-Sqlite\Lib\e_sqlite3.dll'
 )
 
 # Private data to pass to the module specified in ModuleToProcess

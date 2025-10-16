@@ -1,7 +1,7 @@
 #######################################################################################################################
 # File:             Public/Export-PSNessusReportMatrix.ps1
-# Description:      Creates Excel matrix workbooks based on loc_Reports_Matrix-style definitions stored in JSON and an
-#                   Access database populated by the importer.
+# Description:      Creates Excel matrix workbooks based on loc_Reports_Matrix-style definitions stored in JSON and a
+#                   Nessus database (Access or SQLite) populated by the importer.
 # Context:          Replaces the legacy xlMatrixBuilder VBA routine with a PowerShell implementation that operates
 #                   against the modernized module surface while keeping worksheet layout parity for downstream tooling.
 #######################################################################################################################
@@ -12,7 +12,7 @@ function Export-PSNessusReportMatrix {
     Builds Excel worksheets for loc_Reports_Matrix definitions supplied via JSON.
 
 .DESCRIPTION
-    Reads one or more report definitions from a JSON file, queries the associated Nessus Access database to resolve
+    Reads one or more report definitions from a JSON file, queries the associated Nessus database (Access or SQLite) to resolve
     metadata, host columns, and plugin findings, and materializes the results into an Excel workbook. A worksheet is
     created for each report definition, mirroring the behavior of the legacy xlMatrixBuilder VBA implementation.
 
@@ -20,13 +20,13 @@ function Export-PSNessusReportMatrix {
     Path to the JSON file containing an array of loc_Reports_Matrix row definitions.
 
 .PARAMETER DatabasePath
-    Path to the Access database that stores the Nessus import results.
+    Path to the database that stores the Nessus import results.
 
 .PARAMETER OutputPath
     Destination path for the generated workbook. Defaults to <JsonPathBase>.xlsx in the JSON directory.
 
 .PARAMETER Provider
-    Database provider to use. Only Access is currently supported.
+    Database provider to use.
 
 .PARAMETER Visible
     When present, leaves the Excel application visible with the workbook open after creation. Without this switch the
@@ -48,7 +48,7 @@ function Export-PSNessusReportMatrix {
         [ValidateScript({ Test-Path $_ })]
         [string]$JsonPath,
 
-        [Parameter(Mandatory, HelpMessage = 'Access database that contains the Nessus import.')]
+        [Parameter(Mandatory, HelpMessage = 'Database that contains the Nessus import results (Access or SQLite).')]
         [ValidateScript({ Test-Path $_ })]
         [string]$DatabasePath,
 
@@ -65,10 +65,6 @@ function Export-PSNessusReportMatrix {
         [Parameter(HelpMessage = 'Overwrite an existing workbook at the output path.')]
         [switch]$Force
     )
-
-    if ($Provider -ne 'Access') {
-        throw [System.NotImplementedException]::new('Only the Access provider is supported for report matrix export.')
-    }
 
     $resolvedJsonPath = (Resolve-Path -Path $JsonPath).ProviderPath
     $resolvedDatabasePath = (Resolve-Path -Path $DatabasePath).ProviderPath
@@ -130,7 +126,7 @@ function Export-PSNessusReportMatrix {
         $context = New-PSNessusDbContext -Path $resolvedDatabasePath -Provider $Provider
     }
     catch {
-        throw "Unable to open Access database '$resolvedDatabasePath'. $_"
+        throw "Unable to open database '$resolvedDatabasePath'. $_"
     }
 
     try {
@@ -453,17 +449,31 @@ function Get-ReportMatrixHosts {
         [psobject]$Context
     )
 
-    $nameExpression = if ($Definition.UseFQDN) {
-        'Hosts.[host-fqdn] & " (" & Hosts.[host-ip] & ") " AS Name'
+    $provider = $Context.Provider
+    $isAccess = ($provider -eq 'Access')
+
+    if ($Definition.UseFQDN) {
+        if ($isAccess) {
+            $nameExpression = 'Hosts.[host-fqdn] & " (" & Hosts.[host-ip] & ")" AS Name'
+        }
+        else {
+            $nameExpression = 'Hosts."host-fqdn" || " (" || Hosts."host-ip" || ")" AS Name'
+        }
     }
     else {
-        'Hosts.name AS Name'
+        if ($isAccess) {
+            $nameExpression = 'Hosts.name AS Name'
+        }
+        else {
+            $nameExpression = 'Hosts."name" AS Name'
+        }
     }
 
     $sql = @"
 SELECT DISTINCT Hosts.ID, $nameExpression
-FROM PluginInfo
-INNER JOIN (Hosts INNER JOIN ReportItem ON Hosts.ID = ReportItem.HostID) ON PluginInfo.ID = ReportItem.PID
+FROM Hosts
+INNER JOIN ReportItem ON Hosts.ID = ReportItem.HostID
+INNER JOIN PluginInfo ON PluginInfo.ID = ReportItem.PID
 WHERE ($($Definition.WhereClause));
 "@
 
@@ -520,7 +530,8 @@ function Get-ReportMatrixColumns {
     $sql = @"
 SELECT DISTINCT $($Definition.PluginHash) AS pluginHash, $($Definition.Columns)
 FROM PluginInfo
-INNER JOIN (Hosts INNER JOIN ReportItem ON Hosts.ID = ReportItem.HostID) ON PluginInfo.ID = ReportItem.PID
+INNER JOIN ReportItem ON PluginInfo.ID = ReportItem.PID
+INNER JOIN Hosts ON Hosts.ID = ReportItem.HostID
 WHERE ($($Definition.WhereClause));
 "@
 
@@ -540,7 +551,8 @@ function Get-ReportMatrixMatches {
     $sql = @"
 SELECT DISTINCT $($Definition.PluginHash) AS pluginHash, Hosts.ID
 FROM PluginInfo
-INNER JOIN (Hosts INNER JOIN ReportItem ON Hosts.ID = ReportItem.HostID) ON PluginInfo.ID = ReportItem.PID
+INNER JOIN ReportItem ON PluginInfo.ID = ReportItem.PID
+INNER JOIN Hosts ON Hosts.ID = ReportItem.HostID
 WHERE ($($Definition.WhereClause));
 "@
 
@@ -560,7 +572,8 @@ function Get-ReportMatrixOutputs {
     $sql = @"
 SELECT $($Definition.PluginHash) AS pluginHash, Hosts.ID, ReportItem.plugin_output
 FROM PluginInfo
-INNER JOIN (Hosts INNER JOIN ReportItem ON Hosts.ID = ReportItem.HostID) ON PluginInfo.ID = ReportItem.PID
+INNER JOIN ReportItem ON PluginInfo.ID = ReportItem.PID
+INNER JOIN Hosts ON Hosts.ID = ReportItem.HostID
 WHERE ($($Definition.WhereClause));
 "@
 
@@ -619,13 +632,28 @@ function Resolve-FullColumnValue {
         [switch]$PreserveWhitespace
     )
 
-    $escapedHash = ConvertTo-PSNessusDbValue -Value $PluginHash
-    $sql = @"
+    $provider = $Context.Provider
+    $escapedHash = ConvertTo-PSNessusDbValue -Value $PluginHash -Provider $provider
+
+    if ($provider -eq 'Access') {
+        $sql = @"
 SELECT TOP 1 $ColumnName
 FROM PluginInfo
-INNER JOIN (Hosts INNER JOIN ReportItem ON Hosts.ID = ReportItem.HostID) ON PluginInfo.ID = ReportItem.PID
+INNER JOIN ReportItem ON PluginInfo.ID = ReportItem.PID
+INNER JOIN Hosts ON Hosts.ID = ReportItem.HostID
 WHERE (($($Definition.PluginHash)) = ("$escapedHash"));
 "@
+    }
+    else {
+        $sql = @"
+SELECT $ColumnName
+FROM PluginInfo
+INNER JOIN ReportItem ON PluginInfo.ID = ReportItem.PID
+INNER JOIN Hosts ON Hosts.ID = ReportItem.HostID
+WHERE (($($Definition.PluginHash)) = ('$escapedHash'))
+LIMIT 1;
+"@
+    }
 
     $data = Get-PSNessusDbData -Context $Context -Sql $sql
     if ($data.Rows.Count -eq 0) {
@@ -941,3 +969,4 @@ function Get-ExcelColumnName {
 
     return $columnName
 }
+

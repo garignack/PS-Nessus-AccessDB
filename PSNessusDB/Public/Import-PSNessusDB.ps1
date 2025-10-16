@@ -16,7 +16,6 @@ function Import-PSNessusDB {
 
         [Parameter(Mandatory, HelpMessage = 'Database to import results to')]
         [Alias('d', 'AccessDB')]
-        [ValidateScript({ Test-Path $_ })]
         [string]$DatabasePath,
 
         [Parameter(HelpMessage = 'The Log File to write logging information to. Defaults to database name .log')]
@@ -31,13 +30,34 @@ function Import-PSNessusDB {
         [switch]$Trace,
 
         [Parameter(Mandatory = $false, HelpMessage = 'Disable All Logging')]
-        [switch]$NoLog
+        [switch]$NoLog,
+
+        [Parameter(Mandatory = $false, HelpMessage = 'Create a new database if one does not exist (SQLite only).')]
+        [switch]$NewDb
     )
 
     begin {
         $moduleRoot = $PSScriptRoot
-        $resolvedDatabasePath = (Resolve-Path -Path $DatabasePath).ProviderPath
+
+        if ($NewDb -and $Provider -eq 'Access') {
+            throw "-NewDb is only supported when -Provider SQLite."
+        }
+
+        if (-not $NewDb -and -not (Test-Path -LiteralPath $DatabasePath)) {
+            throw "DatabasePath '$DatabasePath' does not exist. Provide an existing database or specify -NewDb."
+        }
+
+        if (Test-Path -LiteralPath $DatabasePath) {
+            $resolvedDatabasePath = (Resolve-Path -Path $DatabasePath).ProviderPath
+        }
+        else {
+            $resolvedDatabasePath = [System.IO.Path]::GetFullPath($DatabasePath)
+        }
+
         $outputDirectory = [System.IO.Path]::GetDirectoryName($resolvedDatabasePath)
+        if ($outputDirectory -and -not (Test-Path -LiteralPath $outputDirectory)) {
+            New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
+        }
 
         if (-not $LogFileName) {
             $LogFileName = Join-Path $outputDirectory ("{0}.log" -f [System.IO.Path]::GetFileNameWithoutExtension($resolvedDatabasePath))
@@ -68,7 +88,7 @@ function Import-PSNessusDB {
         }
 
         try {
-            $script:DbContext = New-PSNessusDbContext -Path $resolvedDatabasePath -Provider $Provider
+            $script:DbContext = New-PSNessusDbContext -Path $resolvedDatabasePath -Provider $Provider -NewDb:$NewDb
         }
         catch {
             $script:ImportLog.Fatal("Cannot connect to database $resolvedDatabasePath", $_)

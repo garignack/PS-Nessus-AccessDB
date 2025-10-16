@@ -151,20 +151,144 @@ function Ensure-AccessColumns {
     }
 }
 
+function Import-PSNessusSqliteModule {
+    if (Get-Module -Name 'PS-Sqlite' -ErrorAction SilentlyContinue) {
+        return
+    }
+
+    $privateRoot = Split-Path -Path $PSScriptRoot -Parent
+    $moduleRoot = Split-Path -Path $privateRoot -Parent
+    $modulePath = Join-Path $moduleRoot 'PS-Sqlite.psm1'
+
+    if (-not (Test-Path -LiteralPath $modulePath)) {
+        throw "SQLite support module not found at '$modulePath'."
+    }
+
+    Import-Module $modulePath -Force
+}
+
+function New-SqliteConnection {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    Import-PSNessusSqliteModule
+    return Open-PSNessusSqliteConnection -Database $Path -AsDefault
+}
+
+function Invoke-SqliteNonQuery {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Sql,
+        [System.Data.SQLite.SQLiteConnection]$Connection,
+        [hashtable]$Parameters
+    )
+
+    Import-PSNessusSqliteModule
+    return Invoke-PSNessusSqliteNonQuery -Query $Sql -Connection $Connection -Parameters $Parameters
+}
+
+function Invoke-SqliteQuery {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Sql,
+        [System.Data.SQLite.SQLiteConnection]$Connection,
+        [hashtable]$Parameters
+    )
+
+    Import-PSNessusSqliteModule
+    return Invoke-PSNessusSqliteQuery -Query $Sql -Connection $Connection -Parameters $Parameters
+}
+
+function Invoke-SqliteInsert {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Table,
+        [Parameter(Mandatory)][string[]]$Columns,
+        [Parameter(Mandatory)][object[]]$Values,
+        [Parameter(Mandatory)][System.Data.SQLite.SQLiteConnection]$Connection
+    )
+
+    if ($Columns.Count -ne $Values.Count) {
+        throw "Columns count must match values count."
+    }
+
+    $parameterNames = @()
+    $parameters = @{}
+    for ($index = 0; $index -lt $Columns.Count; $index++) {
+        $name = "p$index"
+        $parameterNames += "@$name"
+        $parameters[$name] = $Values[$index]
+    }
+
+    $columnList = ($Columns | ForEach-Object { "[{0}]" -f $_ }) -join ', '
+    $parameterList = $parameterNames -join ', '
+    $insertSql = "INSERT INTO {0} ({1}) VALUES ({2})" -f $Table, $columnList, $parameterList
+
+    Invoke-SqliteNonQuery -Sql $insertSql -Connection $Connection -Parameters $parameters | Out-Null
+    $id = Invoke-PSNessusSqliteScalar -Query 'SELECT last_insert_rowid();' -Connection $Connection
+    return [int]$id
+}
+
+function Ensure-SqliteColumns {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Table,
+        [Parameter(Mandatory)][string[]]$Columns,
+        [Parameter(Mandatory)][object[]]$Values,
+        [Parameter(Mandatory)][System.Data.SQLite.SQLiteConnection]$Connection
+    )
+
+    Import-PSNessusSqliteModule
+
+    $info = Invoke-SqliteQuery -Sql ("PRAGMA table_info([{0}]);" -f $Table) -Connection $Connection
+    $existing = @($info | ForEach-Object { $_.name })
+
+    for ($index = 0; $index -lt $Columns.Count; $index++) {
+        $column = $Columns[$index]
+        if ([string]::IsNullOrWhiteSpace($column)) {
+            continue
+        }
+        if ($existing -contains $column) {
+            continue
+        }
+
+        $value = $Values[$index]
+        $dataType = 'TEXT'
+        if ($value -is [int] -or $value -is [long]) {
+            $dataType = 'INTEGER'
+        }
+        elseif ($value -is [double] -or $value -is [float] -or $value -is [decimal]) {
+            $dataType = 'REAL'
+        }
+
+        $alterSql = "ALTER TABLE [{0}] ADD COLUMN [{1}] {2}" -f $Table, $column, $dataType
+        try {
+            Invoke-SqliteNonQuery -Sql $alterSql -Connection $Connection | Out-Null
+        }
+        catch {
+            Write-Warning ("Failed to add column '{0}' to table '{1}' in SQLite database: {2}" -f $column, $Table, $_.Exception.Message)
+        }
+    }
+}
+
 function Ensure-HostEnumeratedPortsTable {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
-        [System.Data.OleDb.OleDbConnection]$Connection
+        [object]$Connection
     )
 
-    $tableSchema = $Connection.GetSchema('Tables') |
-        Where-Object { $_.TABLE_NAME -eq 'HostEnumeratedPorts' -and $_.TABLE_TYPE -eq 'TABLE' }
-    if ($tableSchema) {
-        return
-    }
+    if ($Connection -is [System.Data.OleDb.OleDbConnection]) {
+        $tableSchema = $Connection.GetSchema('Tables') |
+            Where-Object { $_.TABLE_NAME -eq 'HostEnumeratedPorts' -and $_.TABLE_TYPE -eq 'TABLE' }
+        if ($tableSchema) {
+            return
+        }
 
-    $createSql = @"
+        $createSql = @"
 CREATE TABLE HostEnumeratedPorts (
     ID COUNTER PRIMARY KEY,
     HostID LONG,
@@ -174,13 +298,35 @@ CREATE TABLE HostEnumeratedPorts (
 )
 "@
 
-    try {
-        Invoke-AccessNonQuery -Sql $createSql -Connection $Connection
-    }
-    catch {
-        if ($_.Exception.Message -notlike '*already exists*') {
-            throw
+        try {
+            Invoke-AccessNonQuery -Sql $createSql -Connection $Connection
         }
+        catch {
+            if ($_.Exception.Message -notlike '*already exists*') {
+                throw
+            }
+        }
+    }
+    elseif ($Connection -is [System.Data.SQLite.SQLiteConnection]) {
+        Import-PSNessusSqliteModule
+        $existing = Invoke-SqliteQuery -Sql "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'HostEnumeratedPorts';" -Connection $Connection
+        if ($existing.Rows.Count -gt 0) {
+            return
+        }
+
+        $createSql = @"
+CREATE TABLE IF NOT EXISTS HostEnumeratedPorts (
+    ID INTEGER PRIMARY KEY AUTOINCREMENT,
+    HostID INTEGER,
+    Port INTEGER,
+    Protocol TEXT,
+    State TEXT
+);
+"@
+        Invoke-SqliteNonQuery -Sql $createSql -Connection $Connection | Out-Null
+    }
+    else {
+        throw "Unsupported connection type '$($Connection.GetType().FullName)' for Ensure-HostEnumeratedPortsTable."
     }
 }
 
@@ -188,16 +334,17 @@ function Ensure-HostTagsTable {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
-        [System.Data.OleDb.OleDbConnection]$Connection
+        [object]$Connection
     )
 
-    $tableSchema = $Connection.GetSchema('Tables') |
-        Where-Object { $_.TABLE_NAME -eq 'HostTags' -and $_.TABLE_TYPE -eq 'TABLE' }
-    if ($tableSchema) {
-        return
-    }
+    if ($Connection -is [System.Data.OleDb.OleDbConnection]) {
+        $tableSchema = $Connection.GetSchema('Tables') |
+            Where-Object { $_.TABLE_NAME -eq 'HostTags' -and $_.TABLE_TYPE -eq 'TABLE' }
+        if ($tableSchema) {
+            return
+        }
 
-    $createSql = @"
+        $createSql = @"
 CREATE TABLE HostTags (
     ID COUNTER PRIMARY KEY,
     HostID LONG,
@@ -206,13 +353,34 @@ CREATE TABLE HostTags (
 )
 "@
 
-    try {
-        Invoke-AccessNonQuery -Sql $createSql -Connection $Connection
-    }
-    catch {
-        if ($_.Exception.Message -notlike '*already exists*') {
-            throw
+        try {
+            Invoke-AccessNonQuery -Sql $createSql -Connection $Connection
         }
+        catch {
+            if ($_.Exception.Message -notlike '*already exists*') {
+                throw
+            }
+        }
+    }
+    elseif ($Connection -is [System.Data.SQLite.SQLiteConnection]) {
+        Import-PSNessusSqliteModule
+        $existing = Invoke-SqliteQuery -Sql "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'HostTags';" -Connection $Connection
+        if ($existing.Rows.Count -gt 0) {
+            return
+        }
+
+        $createSql = @"
+CREATE TABLE IF NOT EXISTS HostTags (
+    ID INTEGER PRIMARY KEY AUTOINCREMENT,
+    HostID INTEGER,
+    TagName TEXT,
+    TagValue TEXT
+);
+"@
+        Invoke-SqliteNonQuery -Sql $createSql -Connection $Connection | Out-Null
+    }
+    else {
+        throw "Unsupported connection type '$($Connection.GetType().FullName)' for Ensure-HostTagsTable."
     }
 }
 
@@ -287,13 +455,24 @@ function New-PSNessusDbContext {
         [string]$Path,
 
         [ValidateSet('Access', 'SQLite')]
-        [string]$Provider = 'Access'
+        [string]$Provider = 'Access',
+
+        [switch]$NewDb
     )
 
-    $resolvedPath = (Resolve-Path -Path $Path).ProviderPath
+    $resolvedPath = if (Test-Path -LiteralPath $Path) {
+        (Resolve-Path -Path $Path).ProviderPath
+    }
+    else {
+        [System.IO.Path]::GetFullPath($Path)
+    }
 
     switch ($Provider) {
         'Access' {
+            if ($NewDb) {
+                throw "Access provider does not support -NewDb. Provide an existing Access database."
+            }
+
             $context = [pscustomobject]@{
                 Provider  = 'Access'
                 Path      = $resolvedPath
@@ -317,7 +496,7 @@ function New-PSNessusDbContext {
             }
             catch {
                 # ignore cache load failures; logging will handle missing entries
-            }
+                }
             finally {
                 if ($pluginReader) {
                     $pluginReader.Close()
@@ -328,9 +507,72 @@ function New-PSNessusDbContext {
             return $context
         }
         'SQLite' {
-            throw [System.NotImplementedException]::new(
-                "SQLite provider not yet implemented. Import the pssqlite module and extend the database adapter."
-            )
+            Import-PSNessusSqliteModule
+
+            $isNewDatabase = $NewDb -or -not (Test-Path -LiteralPath $resolvedPath)
+            if ($isNewDatabase) {
+                $directory = Split-Path -Path $resolvedPath -Parent
+                if ($directory -and -not (Test-Path -LiteralPath $directory)) {
+                    New-Item -ItemType Directory -Path $directory -Force | Out-Null
+                }
+                if (Test-Path -LiteralPath $resolvedPath) {
+                    Remove-Item -LiteralPath $resolvedPath -Force
+                }
+            }
+
+            $connection = $null
+            try {
+                $connection = New-SqliteConnection -Path $resolvedPath
+
+                if ($isNewDatabase) {
+                    $privateRoot = Split-Path -Path $PSScriptRoot -Parent
+                    $moduleRoot = Split-Path -Path $privateRoot -Parent
+                    $repositoryRoot = Split-Path -Path $moduleRoot -Parent
+                    $schemaPath = Join-Path $repositoryRoot 'schema_sqlite.sql'
+                    if (-not (Test-Path -LiteralPath $schemaPath)) {
+                        throw "SQLite schema definition not found at '$schemaPath'."
+                    }
+
+                    $schemaContent = Get-Content -Path $schemaPath -Raw
+                    $commands = $schemaContent -split ';\s*(\r?\n)+'
+                    foreach ($command in $commands) {
+                        $text = $command.Trim()
+                        if (-not $text) { continue }
+                        if ($text -match '^\s*--') { continue }
+                        Invoke-SqliteNonQuery -Sql $text -Connection $connection | Out-Null
+                    }
+                }
+
+                $context = [pscustomobject]@{
+                    Provider   = 'SQLite'
+                    Path       = $resolvedPath
+                    Connection = $connection
+                }
+
+                $pluginCache = @{}
+                try {
+                    $pluginTable = Invoke-SqliteQuery -Sql 'SELECT ID, PluginHash FROM PluginInfo;' -Connection $connection
+                    foreach ($row in $pluginTable.Rows) {
+                        $hash = $row['PluginHash']
+                        $idValue = $row['ID']
+                        if ($hash -and $hash -isnot [System.DBNull] -and $idValue -and $idValue -isnot [System.DBNull]) {
+                            $pluginCache[[string]$hash] = [int]$idValue
+                        }
+                    }
+                }
+                catch {
+                    # ignore cache load failures; logging will handle missing entries
+                }
+
+                Add-Member -InputObject $context -NotePropertyName PluginCache -NotePropertyValue $pluginCache -Force
+                return $context
+            }
+            catch {
+                if ($connection) {
+                    Close-PSNessusSqliteConnection -Connection $connection
+                }
+                throw
+            }
         }
     }
 }
@@ -348,6 +590,10 @@ function Close-PSNessusDbContext {
 
     if ($Context.Provider -eq 'Access' -and $Context.Connection) {
         $Context.Connection.Close()
+        $Context.Connection = $null
+    }
+    elseif ($Context.Provider -eq 'SQLite' -and $Context.Connection) {
+        Close-PSNessusSqliteConnection -Connection $Context.Connection
         $Context.Connection = $null
     }
 }
@@ -373,7 +619,7 @@ function Add-PSNessusDbRecord {
             return Invoke-AccessInsert -Table $Table -Columns $Columns -Values $Values -Connection $Context.Connection
         }
         'SQLite' {
-            throw [System.NotImplementedException]::new("SQLite insert support not implemented yet.")
+            return Invoke-SqliteInsert -Table $Table -Columns $Columns -Values $Values -Connection $Context.Connection
         }
         default {
             throw "Unsupported provider '$($Context.Provider)'."
@@ -396,7 +642,7 @@ function Get-PSNessusDbData {
             return ,(Invoke-AccessQuery -Sql $Sql -Connection $Context.Connection)
         }
         'SQLite' {
-            throw [System.NotImplementedException]::new("SQLite query support not implemented yet.")
+            return Invoke-SqliteQuery -Sql $Sql -Connection $Context.Connection
         }
         default {
             throw "Unsupported provider '$($Context.Provider)'."
@@ -426,7 +672,8 @@ function Ensure-PSNessusDbColumns {
             break
         }
         'SQLite' {
-            throw [System.NotImplementedException]::new("SQLite column management not implemented yet.")
+            Ensure-SqliteColumns -Table $Table -Columns $Columns -Values $Values -Connection $Context.Connection
+            break
         }
         default {
             throw "Unsupported provider '$($Context.Provider)'."
@@ -438,10 +685,22 @@ function ConvertTo-PSNessusDbValue {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
-        [string]$Value
+        [string]$Value,
+
+        [string]$Provider = 'Access'
     )
 
-    return ConvertTo-AccessSafeValue -Value $Value
+    switch ($Provider) {
+        'Access' {
+            return ConvertTo-AccessSafeValue -Value $Value
+        }
+        'SQLite' {
+            return $Value
+        }
+        default {
+            return $Value
+        }
+    }
 }
 
 # Backwards-compatible aliases for legacy function names.
