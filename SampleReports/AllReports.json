@@ -1,0 +1,73 @@
+[
+    {
+        "Title":  "Windows Security Center",
+        "Name":  "WinSecCenter",
+        "pluginHash":  "ReportItem.port & ReportItem.protocol & ReportItem.plugin_output",
+        "Columns":  "ReportItem.port, ReportItem.protocol, ReportItem.svc_name, ReportItem.plugin_output",
+        "whereClause":  "(PluginInfo.pluginID)=38687",
+        "showOutput":  false,
+        "Description":  "Windows SEC Center Results",
+        "Count":  "0"
+    },
+    {
+        "Title":  "Linux Remote Listeners",
+        "Name":  "LinuxListeners",
+        "pluginHash":  "ReportItem.port & ReportItem.protocol & ReportItem.plugin_output",
+        "Columns":  "ReportItem.port, ReportItem.protocol, ReportItem.svc_name, ReportItem.plugin_output",
+        "whereClause":  "(PluginInfo.pluginID)=25221",
+        "showOutput":  false,
+        "Description":  "Shows Linux Listening Applications",
+        "Count":  "0"
+    },
+    {
+        "Title":  "CVSS Report",
+        "Name":  "CVSS",
+        "pluginHash":  "PluginInfo.pluginHash",
+        "Columns":  "PluginInfo.pluginName, PluginInfo.cvss_base_score, PluginInfo.description, PluginInfo.solution, PluginInfo.cve, PluginInfo.plugin_publication_date, PluginInfo.risk_factor, PluginInfo.exploit_available",
+        "whereClause":  "Not (PluginInfo.cvss_base_score) Is Null",
+        "showOutput":  false,
+        "Description":  "Shows all findings with CVSS ratings",
+        "Count":  "3"
+    },
+    {
+        "Title":  "RHSA Report",
+        "Name":  "RHSA",
+        "pluginHash":  "PluginInfo.pluginHash",
+        "Columns":  "PluginInfo.pluginName, PluginInfo.cvss_base_score, PluginInfo.cve, PluginInfo.plugin_publication_date, PluginInfo.exploit_available, PluginInfo.metasploit_name",
+        "whereClause":  "(PluginInfo.pluginName) Like \"RHSA*\"",
+        "showOutput":  false,
+        "Description":  "Shows all missing RHSA patches",
+        "Count":  "0"
+    },
+    {
+        "Title":  "Linux Host Information",
+        "Name":  "LinuxHostInfo",
+        "pluginHash":  "PluginInfo.pluginHash",
+        "Columns":  "PluginInfo.PluginID, PluginInfo.pluginName",
+        "whereClause":  "(PluginInfo.pluginID) in (19506, 39520, 45590, 11936, 55472)",
+        "showOutput":  true,
+        "Description":  "Prints out Basic Linux Host information",
+        "Count":  "3"
+    },
+    {
+        "Title":  "Windows Host Information",
+        "Name":  "WMIHostINFO",
+        "pluginHash":  "PluginInfo.pluginHash",
+        "Columns":  "PluginInfo.PluginID, PluginInfo.pluginName",
+        "whereClause":  "(PluginInfo.pluginID) in (19506, 24270, 24871, 34096, 20836, 20862, 24270, 27524, 28211, 58651)",
+        "showOutput":  true,
+        "Description":  "Prints out Basic Windows Host information",
+        "Count":  "3"
+    },
+    {
+        "Title":  "Windows Remote Listeners",
+        "Name":  "WindowListeners",
+        "pluginHash":  "ReportItem.port & ReportItem.protocol & ReportItem.plugin_output",
+        "Columns":  "ReportItem.port, ReportItem.protocol, ReportItem.svc_name, ReportItem.plugin_output",
+        "whereClause":  "(PluginInfo.pluginID)=34252",
+        "showOutput":  false,
+        "Description":  "Shows Windows Listening Applications",
+        "Count":  "0"
+    }
+]
+

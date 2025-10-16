@@ -1,0 +1,12 @@
+[
+    {
+        "Title": "CVSS Report",
+        "Name": "CVSS",
+        "pluginHash": "PluginInfo.pluginHash",
+        "Columns": "PluginInfo.pluginName, PluginInfo.cvss_base_score, PluginInfo.description, PluginInfo.solution, PluginInfo.cve, PluginInfo.plugin_publication_date, PluginInfo.risk_factor, PluginInfo.exploit_available",
+        "whereClause": "Not (PluginInfo.cvss_base_score) Is Null",
+        "showOutput": false,
+        "UseFQDN": true,
+        "Description": "Shows all findings with CVSS ratings"
+    }
+]

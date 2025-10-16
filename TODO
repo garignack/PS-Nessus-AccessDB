@@ -1,0 +1,5 @@
+#PSNessusDB TODO
+
+#Public Function
+
+-The database .\PSNESSUSDB.Accdb has a table named loc_Reports_Matrix that is used by a VBA function xlMatrixBuilder that has been copied out to @basReports.bas.  This function takes one or more rows and creates an Excel spreadsheet with one spreadsheet per row input.  An example "CVSS" report has been created for refactor_enum4.accdb ans saved as refactor_enum4.xlsx.  Implement this function as a new Public module function that takes an input of a JSON file with the loc_Reports_Matrix fields and builds the excel spreadsheet for each passed in report definition.
