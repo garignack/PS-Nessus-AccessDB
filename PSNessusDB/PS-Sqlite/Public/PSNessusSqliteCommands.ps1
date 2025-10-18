@@ -56,6 +56,7 @@ function Invoke-PSNessusSqliteScalar {
         [Parameter(Mandatory)][string]$Query,
         [hashtable]$Parameters,
         [object]$Connection,
+        [System.Data.SQLite.SQLiteTransaction]$Transaction,
         [int]$TimeoutSec = 30
     )
 
@@ -64,6 +65,9 @@ function Invoke-PSNessusSqliteScalar {
     try {
         $cmd.CommandText = $Query
         $cmd.CommandTimeout = $TimeoutSec
+        if ($PSBoundParameters.ContainsKey('Transaction') -and $Transaction) {
+            $cmd.Transaction = $Transaction
+        }
         Add-PSNessusSqliteParameters -Command $cmd -Parameters $Parameters
         return $cmd.ExecuteScalar()
     }
@@ -78,6 +82,7 @@ function Invoke-PSNessusSqliteNonQuery {
         [Parameter(Mandatory)][string]$Query,
         [hashtable]$Parameters,
         [object]$Connection,
+        [System.Data.SQLite.SQLiteTransaction]$Transaction,
         [int]$TimeoutSec = 30
     )
 
@@ -86,6 +91,9 @@ function Invoke-PSNessusSqliteNonQuery {
     try {
         $cmd.CommandText = $Query
         $cmd.CommandTimeout = $TimeoutSec
+        if ($PSBoundParameters.ContainsKey('Transaction') -and $Transaction) {
+            $cmd.Transaction = $Transaction
+        }
         Add-PSNessusSqliteParameters -Command $cmd -Parameters $Parameters
         return $cmd.ExecuteNonQuery()
     }
@@ -100,6 +108,7 @@ function Invoke-PSNessusSqliteQuery {
         [Parameter(Mandatory)][string]$Query,
         [hashtable]$Parameters,
         [object]$Connection,
+        [System.Data.SQLite.SQLiteTransaction]$Transaction,
         [int]$TimeoutSec = 30
     )
 
@@ -109,6 +118,9 @@ function Invoke-PSNessusSqliteQuery {
     try {
         $cmd.CommandText = $Query
         $cmd.CommandTimeout = $TimeoutSec
+        if ($PSBoundParameters.ContainsKey('Transaction') -and $Transaction) {
+            $cmd.Transaction = $Transaction
+        }
         Add-PSNessusSqliteParameters -Command $cmd -Parameters $Parameters
         $adapter = [System.Data.SQLite.SQLiteDataAdapter]::new($cmd)
         [void]$adapter.Fill($dataTable)

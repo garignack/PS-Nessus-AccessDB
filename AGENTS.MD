@@ -1,9 +1,9 @@
 ﻿# AGENTS.MD
 
 ## Mission
-- PSNessusDB is a Powershell toolkit for parsing and analyzing Tennable Nessus Scan results.  It was designed to aid information security professionals with processing and evaluting large, complex result sets with minimal installation requirements.
-- Import Nessus .nessus exports into Access or SQLite using the modernized PSNessusDB module.
-- Generate Excel report matrices from loc_Reports_Matrix definitions using `Export-PSNessusReportMatrix` (Access or SQLite).
+- PSNessusDB is a PowerShell toolkit for parsing and analyzing Tenable Nessus scan results with a SQLite-first data workflow and optional Access exports for Office consumers.
+- Import Nessus .nessus exports into SQLite databases by default, using Access only when downstream teams need an Office-native artifact.
+- Generate Excel report matrices from loc_Reports_Matrix definitions using `Export-PSNessusReportMatrix` (SQLite primary, Access export supported).
 
 ## Primary Usage
 1. Import one or many Nessus scan files into a portable database for consolidated querying, trend analysis, and deduplicated plugin metadata.
@@ -27,6 +27,18 @@
 - Schemas: `schema_sqlite.sql` (SQLite), `schema_access_accessdb.sql` (Access reference)
 - `.testoutputs/` for transient logs, databases, and exports (ignored by git)
 
+## Module Architecture
+- `PSNessusDB.psm1` dot-sources every `Private/*.ps1` before `Public/*.ps1`, so new helper scripts auto-load and any public cmdlet added under `Public/` is exported without further wiring.
+- `Import-PSNessusDB` establishes logging (`Switch-LogFile`, `New-LogFile`), opens provider connections through `New-PSNessusDbContext`, loads the `PSNessusDB.Cutter` utilities, then iterates `ReportHost` segments with `Add-PSNessusHostRecord`.
+- `Add-PSNessusHostRecord` writes normalized rows to `Hosts`, `HostEnumeratedPorts`, `HostTags`, `PluginInfo`, and `ReportItem` while caching plugin hashes (`PluginCache` on the DB context) to deduplicate metadata inserts.
+- `New-PSNessusDbContext` selects Access or SQLite drivers, preloads the plugin cache, and for SQLite handles `-NewDb` by running `schema_sqlite.sql` after importing the nested `PS-Sqlite` module; Access rejects `-NewDb` and expects an existing `.accdb`.
+- `Invoke-Sqlite*`, `Invoke-Access*`, and `Ensure-*` helpers inside `Private/Database/AccessProvider.ps1` normalize insert/query paths and schema tweaks so higher-level code remains provider agnostic.
+- `Close-PSNessusDbContext` must be called after imports to release ACE or SQLite handles; `Import-PSNessusDB` handles this in its `end` block.
+- `Initialize-FileCutter`, `Get-ByteMatchLocations`, and `Get-FileString` in `Private/FileCutterUtilities.ps1` compile and use `PSNessusDB.Cutter` for high-speed byte slicing of large `.nessus` exports.
+- `Invoke-Logger` wraps PS-Log calls so callers can safely emit structured messages without duplicating error-handling boilerplate.
+- `Start-PSNessusDbTransaction`, `Complete-PSNessusDbTransaction`, and `Rollback-PSNessusDbTransaction` provide provider-aware batching; `Import-PSNessusDB` commits every 50 hosts by default.
+- `Invoke-PSNessusSqliteToAccessExport` plus the public `Export-PSNessusAccessDatabase` command remake Access databases from SQLite sources while remapping IDs to preserve relationships/macros in the template.
+
 ## Standard Workflow
 1. **Choose provider & target database**
    - Access: `Copy-Item NATemplate-Enumerated.accdb NATemplate-Enumerated-Test.accdb`
@@ -46,6 +58,7 @@
    Import-PSNessusDB -FullName .\.testoutputs\Newest_Export.nessus -DatabasePath .\.testoutputs\sqlite-test.db -Provider SQLite -NewDb -Verbose
    ```
 4. Review `.testoutputs\sqlite-test.log` (or Access log) plus summary counts (`.testoutputs\sqlite-test-summary.txt` created via PS-Sqlite helpers) to confirm hosts, plugins, and report items were imported (baseline: Files=1, Hosts=3, PluginInfo=80, ReportItem=212).
+5. **Access bridge (optional)**: `Export-PSNessusAccessDatabase -SqlitePath .\.testoutputs\sqlite-test.db -AccessTemplatePath .\NATemplate-Enumerated.accdb -OutputPath .\.testoutputs\sqlite-test.accdb -Force -Verbose`
 
 ## Report Matrix Workflow
 1. Sample definition JSON: SampleReports/AllReports.json (replace \u0026 with & if tweaking).

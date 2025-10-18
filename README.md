@@ -1,93 +1,71 @@
-###PSNessusDB
-### PSNessusDB is a Powershell and Microsoft Access toolkit for parsing and analyzing Tennable Nessus Scan results.  It was designed to aid information security professionals with processing and evaluting large, complex result sets with minimal installation requirements.  PSNessusDB is comprised of the following components: 
+# PSNessusDB
 
-##Powershell Module
-The PSNessusDB Powershell module is designed to quickly import Nessus results into an Microsoft 2007 Access backend database.  It works by anaylzing a Nessus_V2 file, locating all ReportHost entries.  It then extracts and parses each entry into the database.
-  
-##Usage
-Intial Installation
+PSNessusDB is a PowerShell module for importing Tenable Nessus `.nessus` exports into a portable SQLite database, running report automation, and optionally materialising Microsoft Access deliverables for Office-centric stakeholders.
 
-1. Place the PSNessusDB folder into one of your module directories: 
-     - <UserDirectory>\Documents\WindowsPowerShell\Modules
-	 - <WindowsDir>\System32\WindowsPowerShell\v1.0\Modules
-   The PowerShell module paths are listed in the $Env:PSModulePath environment variable.
-    
-2. Save the NATemplate.accdb file to a new name and location.  This will be where the database where the results are stored. 
+## Requirements
+- Windows PowerShell 5.1 or PowerShell 7.x
+- .NET Framework 4.7.2 or later (PowerShell 5.1)
+- Optional: Microsoft Access Database Engine (ACE) if you need to open or automate the Access exports
 
-3. Open Powershell, import the PSNessusDB module and create variables to your .nessus and .accdb files 
+## Installation
+1. Clone or download this repository.
+2. Add the repository root to `$Env:PSModulePath` or import the module by path:
+   ```powershell
+   Import-Module .\PSNessusDB\PSNessusDB.psd1 -Force
+   ```
 
-   PS> Import-Module PSNessusDB
+## SQLite-First Workflow
+### Import Nessus Data
+```powershell
+Import-PSNessusDB `
+    -FullName .\Exports\WeeklyScan.nessus `
+    -DatabasePath .\.testoutputs\nessus.sqlite `
+    -Provider SQLite `
+    -NewDb `
+    -Verbose
+```
+- Creates (or reuses) a SQLite database and logs under `.testoutputs\nessus.log`.
+- All plugin metadata is de-duplicated automatically using the `PluginInfo` table.
 
-    PS> $file = "c:\path\to\file.nessus"
-			---- or ---- 
-    PS> $dir = "c:\path\to\nessusfiles"
+### Export Report Matrices
+```powershell
+Export-PSNessusReportMatrix `
+    -JsonPath .\SampleReports\AllReports.json `
+    -DatabasePath .\.testoutputs\nessus.sqlite `
+    -Provider SQLite `
+    -OutputPath .\.testoutputs\AllReports.xlsx `
+    -Verbose -Force
+```
+- Each populated definition becomes a worksheet; skipped definitions emit verbose messages.
 
-   PS> $db = "c:\path\to\db.accdb" (saved in Step 2)
+### Bridge to Access (Optional)
+```powershell
+Export-PSNessusAccessDatabase `
+    -SqlitePath .\.testoutputs\nessus.sqlite `
+    -AccessTemplatePath .\NATemplate-Enumerated.accdb `
+    -OutputPath .\.testoutputs\nessus-access.accdb `
+    -Force -Verbose
+```
+- Copies the template, replays data from SQLite, and keeps template forms, queries, and macros intact.
+- Requires the Microsoft ACE OLE DB provider (32-bit environments must run 32-bit PowerShell).
 
-5. Run the applicable script to import Nessus results into a powershell database
-  a. Single File: PS> Import-PSNessusDB $file $db
-  
-  b. Directory (recursive): PS c:\ps-nessus-accdb> gci $dir -filter "*.nessus" | Import-PSNessusDB -d $db
+## Data Flow
+1. **Import-PSNessusDB** parses each `ReportHost` block with streaming file cutters, batches inserts inside provider-aware transactions, and hydrates the normalized schema (`Files`, `Hosts`, `HostEnumeratedPorts`, `HostTags`, `PluginInfo`, `ReportItem`).
+2. **SQLite** is the system of record. Schema bootstrap comes from `schema_sqlite.sql` and PRAGMAs (`WAL`, `foreign_keys`) are applied on first run.
+3. **Export-PSNessusAccessDatabase** mirrors the SQLite contents into an Access copy, remapping IDs so relationships, lookups, and macros defined in the template continue to function.
+4. **Export-PSNessusReportMatrix** runs cross-table queries (SQLite or Access) defined via JSON, turning findings into analyst-friendly Excel matrices.
 
-##Database Schema
-Files - Nessus File information
-Hosts - Host Information
-PluginInfo - Plugin Information that does not change between findings
-ReportItem - Specfic finding information per host.
+## Project Conventions
+- All transient outputs, logs, and test artefacts belong under `.testoutputs\`.
+- Provider helpers live in `Private\Database\AccessProvider.ps1` and expose provider-neutral functions (`Add-PSNessusDbRecord`, `Get-PSNessusDbData`, transactions, etc.).
+- PS-Sqlite is vendored (`PSNessusDB\PS-Sqlite\`) and loaded on demand to avoid separate installation steps.
+- Use `Invoke-PSNessusSqlite*` and `Invoke-Access*` wrappers instead of ad-hoc SQL; they handle parameterisation, transactions, and provider quirks.
 
-##Import-PSNessusDB Help Comments
+## Logging & Diagnostics
+- Logging is powered by PS-Log (`Switch-LogFile`, `New-LogFile`, `Invoke-Logger`). Default logs mirror the database name with a `.log` extension.
+- Verbose output surfaces counts and timing data; enable `-Trace` on `Import-PSNessusDB` for per-host detail.
+- Transaction batches (default 50 hosts) keep imports performant across both providers.
 
-	<# 
-	.SYNOPSIS
-		Imports a Nessus_V2 file into a Microsoft Access Database
-
-	.DESCRIPTION
-		A Powershell cmdlet that takes a Nessus_V2 file as an input and parses it into an Access Database. 
-		Accepts $Fullname parameters from the pipeline for processing multiple files at once.
-		Utilizes a multi-level logging module for configurable logging outputs
-		Supports --debug and --verbose flags for additional information		
-
-	.PARAMETER  FullName
-		Alias: f or file
-		Absolute or Relative path to Nessus File.  Accepts Pipeline Inputs
-	
-	.PARAMETER  AccessDB
-		Alias: db
-		Absolute or Relative path to PSNessusDB Access Database File
-		
-	.PARAMETER  LogFileName
-		Alias: l
-		Absolute or Relative path
-		
-	.PARAMETER  Trace
-		Enables All Logging
-		
-	.PARAMETER NoLog 
-		Disables all logging
-		
-	.EXAMPLE
-		Single File Processing
-		$file = "C:\Path\To\Scan.nessus"
-		$db = "C:\Path\To\Scan.accdb"
-		$LogFile = "C:\Path\To\scan.log"
-		Import-PSNessusDB -f $File -db $db -l $log  
-
-		Pipeline Processing
-		$dir = "C:\Path\To"
-		Get-ChildItem -d $dir -include *.nessus -recurse -force | Import-PSNessusDB -f $file -db $db -l $log
-		
-	.INPUTS
-		Nessus_V2 File
-
-	.OUTPUTS
-		Microsoft Access Database
-
-	.NOTES
-		Credits:
-		Joshua Poehls (Jpoehls): https://github.com/jpoehls/hulk-example/blob/master/_posts/2013/2013-01-24-benchmarking-with-Powershell.md
-		Hemanth.D:  http://sqlchow.wordpress.com/2012/08/06/creating-a-logging-framework-in-powershell-the-final-part/ 
-		SANTOSH: http://aspdotnetcodebook.blogspot.com/2013/04/boyer-moore-search-algorithm.html
-
-	.LINK
-		https://github.com/garignack/PS-Nessus-AccessDB
-	#>
+## Optional Tooling
+- `tools\extract_access_schema.ps1` can regenerate Access DDL snapshots.
+- Future enhancements: integrate `Invoke-ScriptAnalyzer`, automated regression imports, and host delta comparisons.

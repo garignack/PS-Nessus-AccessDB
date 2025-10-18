@@ -27,11 +27,22 @@ function Invoke-AccessNonQuery {
         [string]$Sql,
 
         [Parameter(Mandatory)]
-        [System.Data.OleDb.OleDbConnection]$Connection
+        [System.Data.OleDb.OleDbConnection]$Connection,
+
+        [System.Data.OleDb.OleDbTransaction]$Transaction
     )
 
-    $command = New-Object System.Data.OleDb.OleDbCommand($Sql, $Connection)
-    $command.ExecuteNonQuery() | Out-Null
+    $command = $Connection.CreateCommand()
+    try {
+        $command.CommandText = $Sql
+        if ($PSBoundParameters.ContainsKey('Transaction') -and $Transaction) {
+            $command.Transaction = $Transaction
+        }
+        $command.ExecuteNonQuery() | Out-Null
+    }
+    finally {
+        $command.Dispose()
+    }
 }
 
 function Invoke-AccessQuery {
@@ -43,12 +54,29 @@ function Invoke-AccessQuery {
         [Parameter(Mandatory)]
         [System.Data.OleDb.OleDbConnection]$Connection,
 
+        [System.Data.OleDb.OleDbTransaction]$Transaction,
+
         [switch]$Grid
     )
 
+    $command = $Connection.CreateCommand()
     $dataTable = New-Object System.Data.DataTable
-    $adapter = New-Object System.Data.OleDb.OleDbDataAdapter($Sql, $Connection)
-    $null = $adapter.Fill($dataTable)
+    try {
+        $command.CommandText = $Sql
+        if ($PSBoundParameters.ContainsKey('Transaction') -and $Transaction) {
+            $command.Transaction = $Transaction
+        }
+        $adapter = New-Object System.Data.OleDb.OleDbDataAdapter($command)
+        try {
+            $null = $adapter.Fill($dataTable)
+        }
+        finally {
+            $adapter.Dispose()
+        }
+    }
+    finally {
+        $command.Dispose()
+    }
 
     if ($Grid) {
         $dataTable | Out-GridView -Title $Sql
@@ -71,29 +99,59 @@ function Invoke-AccessInsert {
         [object[]]$Values,
 
         [Parameter(Mandatory)]
-        [System.Data.OleDb.OleDbConnection]$Connection
+        [System.Data.OleDb.OleDbConnection]$Connection,
+
+        [System.Data.OleDb.OleDbTransaction]$Transaction
     )
 
     if ($Columns.Count -ne $Values.Count) {
         throw "Columns count must match values count."
     }
 
-    $columnList = for ($index = 0; $index -lt $Columns.Count; $index++) {
-        "[{0}]" -f $Columns[$index]
+    $columnList = ($Columns | ForEach-Object { "[{0}]" -f $_ }) -join ', '
+    $placeholders = @()
+    for ($i = 0; $i -lt $Columns.Count; $i++) {
+        $placeholders += '?'
     }
-
-    $valueList = for ($index = 0; $index -lt $Values.Count; $index++) {
-        "'{0}'" -f $Values[$index]
-    }
-
-    $insertSql = "INSERT INTO {0} ({1}) VALUES ({2})" -f $Table, ($columnList -join ', '), ($valueList -join ', ')
+    $insertSql = "INSERT INTO {0} ({1}) VALUES ({2})" -f $Table, $columnList, ($placeholders -join ', ')
 
     try {
-        $insertCommand = New-Object System.Data.OleDb.OleDbCommand($insertSql, $Connection)
-        $null = $insertCommand.ExecuteNonQuery()
+        $insertCommand = $Connection.CreateCommand()
+        try {
+            $insertCommand.CommandText = $insertSql
+            if ($PSBoundParameters.ContainsKey('Transaction') -and $Transaction) {
+                $insertCommand.Transaction = $Transaction
+            }
 
-        $identityCommand = New-Object System.Data.OleDb.OleDbCommand("SELECT @@IDENTITY;", $Connection)
-        return [int]$identityCommand.ExecuteScalar()
+            for ($index = 0; $index -lt $Values.Count; $index++) {
+                $parameter = $insertCommand.CreateParameter()
+                $value = $Values[$index]
+                if ($null -eq $value) {
+                    $parameter.Value = [DBNull]::Value
+                }
+                else {
+                    $parameter.Value = $Values[$index]
+                }
+                [void]$insertCommand.Parameters.Add($parameter)
+            }
+
+            $null = $insertCommand.ExecuteNonQuery()
+        }
+        finally {
+            $insertCommand.Dispose()
+        }
+
+        $identityCommand = $Connection.CreateCommand()
+        try {
+            $identityCommand.CommandText = 'SELECT @@IDENTITY;'
+            if ($PSBoundParameters.ContainsKey('Transaction') -and $Transaction) {
+                $identityCommand.Transaction = $Transaction
+            }
+            return [int]$identityCommand.ExecuteScalar()
+        }
+        finally {
+            $identityCommand.Dispose()
+        }
     }
     catch {
         Write-Warning "Error inserting data into $Table"
@@ -183,11 +241,12 @@ function Invoke-SqliteNonQuery {
     param(
         [Parameter(Mandatory)][string]$Sql,
         [System.Data.SQLite.SQLiteConnection]$Connection,
-        [hashtable]$Parameters
+        [hashtable]$Parameters,
+        [System.Data.SQLite.SQLiteTransaction]$Transaction
     )
 
     Import-PSNessusSqliteModule
-    return Invoke-PSNessusSqliteNonQuery -Query $Sql -Connection $Connection -Parameters $Parameters
+    return Invoke-PSNessusSqliteNonQuery -Query $Sql -Connection $Connection -Parameters $Parameters -Transaction $Transaction
 }
 
 function Invoke-SqliteQuery {
@@ -195,11 +254,12 @@ function Invoke-SqliteQuery {
     param(
         [Parameter(Mandatory)][string]$Sql,
         [System.Data.SQLite.SQLiteConnection]$Connection,
-        [hashtable]$Parameters
+        [hashtable]$Parameters,
+        [System.Data.SQLite.SQLiteTransaction]$Transaction
     )
 
     Import-PSNessusSqliteModule
-    return Invoke-PSNessusSqliteQuery -Query $Sql -Connection $Connection -Parameters $Parameters
+    return Invoke-PSNessusSqliteQuery -Query $Sql -Connection $Connection -Parameters $Parameters -Transaction $Transaction
 }
 
 function Invoke-SqliteInsert {
@@ -208,7 +268,8 @@ function Invoke-SqliteInsert {
         [Parameter(Mandatory)][string]$Table,
         [Parameter(Mandatory)][string[]]$Columns,
         [Parameter(Mandatory)][object[]]$Values,
-        [Parameter(Mandatory)][System.Data.SQLite.SQLiteConnection]$Connection
+        [Parameter(Mandatory)][System.Data.SQLite.SQLiteConnection]$Connection,
+        [System.Data.SQLite.SQLiteTransaction]$Transaction
     )
 
     if ($Columns.Count -ne $Values.Count) {
@@ -227,8 +288,8 @@ function Invoke-SqliteInsert {
     $parameterList = $parameterNames -join ', '
     $insertSql = "INSERT INTO {0} ({1}) VALUES ({2})" -f $Table, $columnList, $parameterList
 
-    Invoke-SqliteNonQuery -Sql $insertSql -Connection $Connection -Parameters $parameters | Out-Null
-    $id = Invoke-PSNessusSqliteScalar -Query 'SELECT last_insert_rowid();' -Connection $Connection
+    Invoke-SqliteNonQuery -Sql $insertSql -Connection $Connection -Parameters $parameters -Transaction $Transaction | Out-Null
+    $id = Invoke-PSNessusSqliteScalar -Query 'SELECT last_insert_rowid();' -Connection $Connection -Transaction $Transaction
     return [int]$id
 }
 
@@ -387,30 +448,11 @@ CREATE TABLE IF NOT EXISTS HostTags (
 function ConvertTo-AccessSafeValue {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)]
+        [AllowNull()]
         [string]$Value
     )
 
-    if ($null -eq $Value) {
-        return ''
-    }
-
-    $escaped = $Value.Replace("`'", "`'`'")
-    $escaped = $escaped.Replace("?", "`[?`]")
-    $escaped = $escaped.Replace("*", "`[*`]")
-    $escaped = $escaped.Replace("#", "`[#`]")
-
-    $escaped = $escaped.Replace("`n", "`r`n")
-    $escaped = $escaped.Replace("`r", "`r`n")
-    $escaped = $escaped.Replace("`r`n`r`n", "`r`n")
-
-    do {
-        $escaped = $escaped.TrimStart("`r").TrimStart("`n").Trim()
-    } until (
-        -not ($escaped.StartsWith("`r") -or $escaped.StartsWith("`n") -or $escaped.StartsWith(" "))
-    )
-
-    return $escaped
+    return $Value
 }
 
 function Set-AccessRecord {
@@ -432,16 +474,56 @@ function Set-AccessRecord {
         [System.Data.OleDb.OleDbConnection]$Connection
     )
 
-    $existing = Invoke-AccessQuery -Sql "SELECT ID FROM $Table WHERE ID = $Id" -Connection $Connection
-    if ($existing) {
-        $setParts = for ($index = 0; $index -lt $Columns.Count; $index++) {
-            "[{0}] = '{1}'" -f $Columns[$index], $Values[$index]
+    $dataTable = New-Object System.Data.DataTable
+    $selectCommand = $Connection.CreateCommand()
+    try {
+        $selectCommand.CommandText = "SELECT ID FROM [$Table] WHERE ID = ?;"
+        $idParameter = $selectCommand.CreateParameter()
+        $idParameter.Value = [int]$Id
+        [void]$selectCommand.Parameters.Add($idParameter)
+
+        $adapter = [System.Data.OleDb.OleDbDataAdapter]::new($selectCommand)
+        try {
+            [void]$adapter.Fill($dataTable)
+        }
+        finally {
+            $adapter.Dispose()
+        }
+    }
+    finally {
+        $selectCommand.Dispose()
+    }
+
+    if ($dataTable.Rows.Count -gt 0) {
+        $setFragments = for ($index = 0; $index -lt $Columns.Count; $index++) {
+            "[{0}] = ?" -f $Columns[$index]
         }
 
-        $updateSql = "UPDATE {0} SET {1} WHERE ID = {2};" -f $Table, ($setParts -join ', '), $Id
-        $updateCommand = New-Object System.Data.OleDb.OleDbCommand($updateSql, $Connection)
-        $null = $updateCommand.ExecuteNonQuery()
+        $updateCommand = $Connection.CreateCommand()
+        try {
+            $updateCommand.CommandText = "UPDATE [$Table] SET {0} WHERE ID = ?;" -f ($setFragments -join ', ')
 
+            for ($index = 0; $index -lt $Values.Count; $index++) {
+                $parameter = $updateCommand.CreateParameter()
+                $value = $Values[$index]
+                if ($null -eq $value) {
+                    $parameter.Value = [DBNull]::Value
+                }
+                else {
+                    $parameter.Value = $value
+                }
+                [void]$updateCommand.Parameters.Add($parameter)
+            }
+
+            $idUpdateParameter = $updateCommand.CreateParameter()
+            $idUpdateParameter.Value = [int]$Id
+            [void]$updateCommand.Parameters.Add($idUpdateParameter)
+
+            $null = $updateCommand.ExecuteNonQuery()
+        }
+        finally {
+            $updateCommand.Dispose()
+        }
         return [int]$Id
     }
 
@@ -497,17 +579,18 @@ function New-PSNessusDbContext {
             catch {
                 # ignore cache load failures; logging will handle missing entries
                 }
-            finally {
-                if ($pluginReader) {
-                    $pluginReader.Close()
-                }
-            }
+              finally {
+                  if ($pluginReader) {
+                      $pluginReader.Close()
+                  }
+              }
 
-            Add-Member -InputObject $context -NotePropertyName PluginCache -NotePropertyValue $pluginCache -Force
-            return $context
-        }
-        'SQLite' {
-            Import-PSNessusSqliteModule
+              Add-Member -InputObject $context -NotePropertyName PluginCache -NotePropertyValue $pluginCache -Force
+              Add-Member -InputObject $context -NotePropertyName Transaction -NotePropertyValue $null -Force
+              return $context
+          }
+          'SQLite' {
+              Import-PSNessusSqliteModule
 
             $isNewDatabase = $NewDb -or -not (Test-Path -LiteralPath $resolvedPath)
             if ($isNewDatabase) {
@@ -541,6 +624,15 @@ function New-PSNessusDbContext {
                         if ($text -match '^\s*--') { continue }
                         Invoke-SqliteNonQuery -Sql $text -Connection $connection | Out-Null
                     }
+
+                    $pragmaStatements = @(
+                        'PRAGMA journal_mode = WAL;',
+                        'PRAGMA synchronous = NORMAL;',
+                        'PRAGMA foreign_keys = ON;'
+                    )
+                    foreach ($pragma in $pragmaStatements) {
+                        Invoke-SqliteNonQuery -Sql $pragma -Connection $connection | Out-Null
+                    }
                 }
 
                 $context = [pscustomobject]@{
@@ -565,6 +657,7 @@ function New-PSNessusDbContext {
                 }
 
                 Add-Member -InputObject $context -NotePropertyName PluginCache -NotePropertyValue $pluginCache -Force
+                Add-Member -InputObject $context -NotePropertyName Transaction -NotePropertyValue $null -Force
                 return $context
             }
             catch {
@@ -588,6 +681,15 @@ function Close-PSNessusDbContext {
         return
     }
 
+    if ($Context.PSObject.Properties.Name -contains 'Transaction') {
+        $transaction = $Context.Transaction
+        if ($transaction) {
+            try { $transaction.Rollback() } catch {}
+            try { $transaction.Dispose() } catch {}
+            $Context.Transaction = $null
+        }
+    }
+
     if ($Context.Provider -eq 'Access' -and $Context.Connection) {
         $Context.Connection.Close()
         $Context.Connection = $null
@@ -595,6 +697,86 @@ function Close-PSNessusDbContext {
     elseif ($Context.Provider -eq 'SQLite' -and $Context.Connection) {
         Close-PSNessusSqliteConnection -Connection $Context.Connection
         $Context.Connection = $null
+    }
+}
+
+function Start-PSNessusDbTransaction {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [psobject]$Context
+    )
+
+    if ($null -eq $Context) {
+        throw 'Cannot start a transaction without a database context.'
+    }
+
+    if ($Context.PSObject.Properties.Name -contains 'Transaction' -and $Context.Transaction) {
+        throw 'A transaction is already active for this context.'
+    }
+
+    switch ($Context.Provider) {
+        'Access' {
+            $transaction = $Context.Connection.BeginTransaction()
+            $Context.Transaction = $transaction
+            return $transaction
+        }
+        'SQLite' {
+            $transaction = $Context.Connection.BeginTransaction()
+            $Context.Transaction = $transaction
+            return $transaction
+        }
+        default {
+            throw "Unsupported provider '$($Context.Provider)'."
+        }
+    }
+}
+
+function Complete-PSNessusDbTransaction {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [psobject]$Context
+    )
+
+    if ($null -eq $Context) {
+        return
+    }
+
+    if ($Context.PSObject.Properties.Name -notcontains 'Transaction' -or -not $Context.Transaction) {
+        return
+    }
+
+    try {
+        $Context.Transaction.Commit()
+    }
+    finally {
+        try { $Context.Transaction.Dispose() } catch {}
+        $Context.Transaction = $null
+    }
+}
+
+function Rollback-PSNessusDbTransaction {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [psobject]$Context
+    )
+
+    if ($null -eq $Context) {
+        return
+    }
+
+    if ($Context.PSObject.Properties.Name -notcontains 'Transaction' -or -not $Context.Transaction) {
+        return
+    }
+
+    try {
+        $Context.Transaction.Rollback()
+    }
+    finally {
+        try { $Context.Transaction.Dispose() } catch {}
+        $Context.Transaction = $null
     }
 }
 
@@ -616,10 +798,10 @@ function Add-PSNessusDbRecord {
 
     switch ($Context.Provider) {
         'Access' {
-            return Invoke-AccessInsert -Table $Table -Columns $Columns -Values $Values -Connection $Context.Connection
+            return Invoke-AccessInsert -Table $Table -Columns $Columns -Values $Values -Connection $Context.Connection -Transaction $Context.Transaction
         }
         'SQLite' {
-            return Invoke-SqliteInsert -Table $Table -Columns $Columns -Values $Values -Connection $Context.Connection
+            return Invoke-SqliteInsert -Table $Table -Columns $Columns -Values $Values -Connection $Context.Connection -Transaction $Context.Transaction
         }
         default {
             throw "Unsupported provider '$($Context.Provider)'."
