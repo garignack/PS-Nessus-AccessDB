@@ -99,16 +99,6 @@ function Import-PSNessusDB {
             throw "Fatal Error, Exiting"
         }
 
-        try {
-            Initialize-FileCutter
-            $script:ImportLog.Debug('Initialized PSNessusDB.Cutter for high-speed chunking.')
-        }
-        catch {
-            $script:ImportLog.Debug($_.Exception.ToString())
-            $script:ImportLog.Fatal('Cannot load [PSNessusDB.Cutter] library', $_)
-            throw "Fatal Error, Exiting"
-        }
-
         # Commit each host in its own transaction to tighten failure isolation.
         [int]$transactionBatchSize = 1
         $script:TotalStopwatch = [Diagnostics.Stopwatch]::new()
@@ -125,39 +115,17 @@ function Import-PSNessusDB {
         $script:ImportLog.Info("Processing File: {0}" -f [System.IO.Path]::GetFileName($resolvedFullName))
         $script:ImportLog.Info('-----------------------------')
 
-        $script:ImportLog.Verbose('Building Stream Reader')
-        $streamReader = New-Object System.IO.StreamReader($resolvedFullName, $true)
-        $fileLength = $streamReader.BaseStream.Length
-        $script:ImportLog.Verbose("File size is: $fileLength")
-
-        $script:ImportLog.Verbose('Checking if file is a Nessus_V2 export')
-        [string]$fileHeader = $streamReader.ReadLine()
-        $fileHeader += $streamReader.ReadLine()
-
-        $script:ImportLog.Debug('---- Header ----')
-        $script:ImportLog.Debug($fileHeader)
-
-        if ($fileHeader.Contains('<NessusClientData_v2>') -ne $true) {
-            $streamReader.Close()
-            Remove-Variable -Name streamReader -ErrorAction SilentlyContinue
-            $script:ImportLog.Error('File is not a Nessus_V2 export')
+        $headerMetadata = Get-NessusReportMetadata -Path $resolvedFullName
+        if (-not $headerMetadata.IsV2) {
+            $script:ImportLog.Error('File is not a NessusClientData_v2 export.')
             throw 'Invalid Nessus export format.'
         }
 
-        $streamReader.Close()
+        $script:ImportLog.Debug('Counting <ReportHost> entries')
+        $totalHosts = Get-NessusReportHosts -Path $resolvedFullName -CountOnly
+        $script:ImportLog.Verbose("Found $totalHosts ReportHost entries")
 
-        $pattern = "<ReportHost "
-        $script:ImportLog.Verbose("Locating ReportHost patterns: $pattern")
-        $rawOffsets = [System.Collections.Generic.List[int]](Get-ByteMatchLocations -FilePath $resolvedFullName -Pattern $pattern)
-        $pattern = "</ReportHost>"
-        $rawHostsEnd = [System.Collections.Generic.List[int]](Get-ByteMatchLocations -FilePath $resolvedFullName -Pattern $pattern)
-
-        $offsets = @($rawOffsets | Where-Object { $_ -ge 0 -and $_ -lt $fileLength })
-        $hostsEnd = @($rawHostsEnd | Where-Object { $_ -ge 0 -and $_ -lt $fileLength })
-
-        $script:ImportLog.Verbose("Found $($offsets.Count) ReportHost entries")
-
-        if ($offsets.Count -eq 0) {
+        if ($totalHosts -eq 0) {
             $script:ImportLog.Warn('No hosts found in file.')
             return
         }
@@ -165,20 +133,11 @@ function Import-PSNessusDB {
         $script:ImportLog.Verbose('Parsing report name')
         $reportName = ''
 
-        if ($hostsEnd.Count -gt 0) {
-            [byte[]]$reportBytes = Get-FileBytes -FilePath $resolvedFullName -Start 0 -End $offsets[0]
-            $reportHeader = Convert-BytesToString -Bytes $reportBytes -Encoding 'UTF8'
-
-            $reportMatch = [regex]::Match($reportHeader, '<Report\s+name="([^"]+)"', 'IgnoreCase')
-            if ($reportMatch.Success) {
-                $reportName = $reportMatch.Groups[1].Value
-            }
-            elseif (-not $reportName) {
-                $policyMatch = [regex]::Match($reportHeader, '<policyName>([^<]+)</policyName>', 'IgnoreCase')
-                if ($policyMatch.Success) {
-                    $reportName = $policyMatch.Groups[1].Value
-                }
-            }
+        if ($headerMetadata.ReportName) {
+            $reportName = $headerMetadata.ReportName
+        }
+        elseif ($headerMetadata.PolicyName) {
+            $reportName = $headerMetadata.PolicyName
         }
 
         if ($reportName) {
@@ -193,7 +152,8 @@ function Import-PSNessusDB {
         $timings = @()
         [int]$hostsProcessed = 0
 
-        Write-Progress -Activity "Processing $reportName" -Status "Hosts: $hostsProcessed / $($offsets.Count)" -PercentComplete (($hostsProcessed / $offsets.Count) * 100)
+        $initialPercent = if ($totalHosts -gt 0) { ($hostsProcessed / [double]$totalHosts) * 100 } else { 100 }
+        Write-Progress -Activity "Processing $reportName" -Status "Hosts: $hostsProcessed / $totalHosts" -PercentComplete $initialPercent
         [int]$hostsInBatch = 0
         $transactionActive = $false
 
@@ -206,31 +166,21 @@ function Import-PSNessusDB {
             $fileId = Add-PSNessusDbRecord -Context $script:DbContext -Table 'Files' -Columns $fileColumns -Values $fileValues
             $script:ImportLog.Debug("Created Files row ID $fileId for report '$reportName'.")
 
-            for ($index = 0; $index -le $offsets.Count - 1; $index++) {
+            foreach ($hostEntry in Get-NessusReportHosts -Path $resolvedFullName) {
                 $script:HostStopwatch.Reset()
                 $script:HostStopwatch.Start()
 
                 try {
-                    $hostStart = $offsets[$index]
-                    $hostEndBoundary = -1
-                    if ($hostsEnd.Count -gt $index) {
-                        $hostEndBoundary = $hostsEnd[$index] + 13
-                    }
-
-                    $hostString = Get-FileString -FilePath $resolvedFullName -Start $hostStart -End $hostEndBoundary -Encoding 'UTF8'
-
-                    $hostString = $hostString.Substring(0, ($hostString.IndexOf('</ReportHost>') + 13))
-                    $hostString = $hostString.Replace('><HostProperties>', ' xmlns:cm="http://www.nessus.org/cm"><HostProperties>')
-                    [xml]$xmlHost = $hostString
+                    $xmlHost = $hostEntry.Xml
                 }
                 catch {
-                    $script:ImportLog.Error("Error processing ReportHost entry at offset $($offsets[$index])", $_)
+                    $script:ImportLog.Error("Error processing ReportHost entry at index $($hostEntry.Index)", $_)
                     $script:ImportLog.Debug($_.Exception.ToString())
                     continue
                 }
 
                 $script:ImportLog.Verbose("Host retrieval: $($script:HostStopwatch.ElapsedMilliseconds)ms")
-                $script:ImportLog.Info("Processing[$($offsets[$index])] : $($xmlHost.ReportHost.name)")
+                $script:ImportLog.Info("Processing[$($hostEntry.Index)] : $($xmlHost.ReportHost.name)")
 
                 Add-PSNessusHostRecord -XmlHost $xmlHost -DbContext $script:DbContext -FileId $fileId -Logger $script:ImportLog
 
@@ -240,17 +190,18 @@ function Import-PSNessusDB {
                 $timings += $script:HostStopwatch.Elapsed
                 $script:ImportLog.Verbose("Host Time: $($script:HostStopwatch.ElapsedMilliseconds)ms")
 
-                Write-Progress -Activity "Processing $reportName" -Status "Hosts: $hostsProcessed / $($offsets.Count)" -PercentComplete (($hostsProcessed / $offsets.Count) * 100)
+                $percentComplete = if ($totalHosts -gt 0) { ($hostsProcessed / [double]$totalHosts) * 100 } else { 100 }
+                Write-Progress -Activity "Processing $reportName" -Status "Hosts: $hostsProcessed / $totalHosts" -PercentComplete $percentComplete
 
                 if ($transactionBatchSize -gt 0 -and $hostsInBatch -ge $transactionBatchSize) {
                     Complete-PSNessusDbTransaction -Context $script:DbContext
                     $transactionActive = $false
                     $hostsInBatch = 0
 
-                    if ($index -lt $offsets.Count - 1) {
+                    if ($hostsProcessed -lt $totalHosts) {
                         Start-PSNessusDbTransaction -Context $script:DbContext | Out-Null
                         $transactionActive = $true
-                        $script:ImportLog.Debug("Committed host batch at index $index. Restarting transaction for remaining hosts.")
+                        $script:ImportLog.Debug("Committed host batch at host index $($hostEntry.Index). Restarting transaction for remaining hosts.")
                     }
                 }
             }
@@ -290,6 +241,8 @@ function Import-PSNessusDB {
         $script:ImportLog.Info("Host Max: $maximum ms")
         $script:ImportLog.Info("Parsing Total: $($script:TotalStopwatch.Elapsed)")
         $script:ImportLog.Info('-----------------------------')
+
+        Write-Progress -Activity "Processing $reportName" -Status "Hosts: $hostsProcessed / $totalHosts" -Completed
     }
 
     end {
