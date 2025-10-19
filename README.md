@@ -27,6 +27,17 @@ Import-PSNessusDB `
 - Creates (or reuses) a SQLite database and logs under `.testoutputs\nessus.log`.
 - All plugin metadata is de-duplicated automatically using the `PluginInfo` table.
 
+#### Import Multiple Nessus Files
+```powershell
+Get-ChildItem .\.testoutputs\GoogleTop1000 -Filter '*.nessus' |
+    Sort-Object FullName |
+    Import-PSNessusDB -DatabasePath .\.testoutputs\google-top1000.sqlite `
+                     -Provider SQLite -NewDb -Verbose
+```
+- Streams every `.nessus` file in the directory through `Import-PSNessusDB`.
+- Use `-NewDb` to bootstrap a fresh SQLite database on the first run; omit it to append into an existing database.
+- All imports share the same log file (based on the database name) so you can review a consolidated trace.
+
 ### Export Report Matrices
 ```powershell
 Export-PSNessusReportMatrix `

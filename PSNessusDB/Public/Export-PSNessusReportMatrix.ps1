@@ -87,6 +87,28 @@ function Export-PSNessusReportMatrix {
         throw "No report definitions were found in '$resolvedJsonPath'."
     }
 
+    $reportCount = $reportDefinitions.Count
+    $overallActivity = 'Building report matrices'
+    [int]$overallProgressId = Get-Random -Minimum 1 -Maximum ([int]::MaxValue)
+    $updateOverallProgress = {
+        param(
+            [string]$Status,
+            [int]$CompletedCount
+        )
+
+        $percent = 0
+        if ($reportCount -gt 0) {
+            $ratio = [double]$CompletedCount / [double]$reportCount
+            if ($ratio -lt 0) { $ratio = 0 }
+            if ($ratio -gt 1) { $ratio = 1 }
+            $percent = [int][math]::Round($ratio * 100, 0)
+        }
+
+        Write-Progress -Id $overallProgressId -Activity $overallActivity -Status $Status -PercentComplete $percent
+    }
+
+    & $updateOverallProgress 'Initializing report build...' 0
+
     if ($PSBoundParameters.ContainsKey('OutputPath')) {
         if ([System.IO.Path]::IsPathRooted($OutputPath)) {
             $resolvedOutputPath = $OutputPath
@@ -149,9 +171,13 @@ function Export-PSNessusReportMatrix {
 
         $excel.Visible = [bool]$Visible
         $processedSheets = 0
+        [int]$reportIndex = 0
 
         foreach ($definition in $reportDefinitions) {
+            $reportIndex++
             $resolvedDefinition = Resolve-ReportDefinition -Definition $definition -Index ($processedSheets + 1)
+            $statusMessage = "Processing {0} ({1}/{2})" -f $resolvedDefinition.Name, $reportIndex, $reportCount
+            & $updateOverallProgress $statusMessage ($reportIndex - 1)
             Write-Verbose ("Processing report '{0}'" -f $resolvedDefinition.Name)
 
             $hosts = Get-ReportMatrixHosts -Definition $resolvedDefinition -Context $context
@@ -165,6 +191,7 @@ function Export-PSNessusReportMatrix {
                         Reason        = 'No hosts matched the whereClause.'
                     })
                 Write-Verbose ("Skipping '{0}' because no hosts were returned." -f $resolvedDefinition.Name)
+                & $updateOverallProgress ("Skipped {0} ({1}/{2})" -f $resolvedDefinition.Name, $reportIndex, $reportCount) $reportIndex
                 continue
             }
 
@@ -179,6 +206,7 @@ function Export-PSNessusReportMatrix {
                         Reason        = 'No plugin rows matched the whereClause.'
                     })
                 Write-Verbose ("Skipping '{0}' because no plugin rows were returned." -f $resolvedDefinition.Name)
+                & $updateOverallProgress ("Skipped {0} ({1}/{2})" -f $resolvedDefinition.Name, $reportIndex, $reportCount) $reportIndex
                 continue
             }
 
@@ -193,6 +221,7 @@ function Export-PSNessusReportMatrix {
                         Reason        = 'No host/plugin combinations were found.'
                     })
                 Write-Verbose ("Skipping '{0}' because no host/plugin combinations were returned." -f $resolvedDefinition.Name)
+                & $updateOverallProgress ("Skipped {0} ({1}/{2})" -f $resolvedDefinition.Name, $reportIndex, $reportCount) $reportIndex
                 continue
             }
             Write-Verbose ("Match table type: {0}" -f $matchTable.GetType().FullName)
@@ -220,6 +249,7 @@ function Export-PSNessusReportMatrix {
                         Reason        = 'No metadata columns were defined for the report.'
                     })
                 Write-Verbose ("Skipping '{0}' because no metadata columns were defined." -f $resolvedDefinition.Name)
+                & $updateOverallProgress ("Skipped {0} ({1}/{2})" -f $resolvedDefinition.Name, $reportIndex, $reportCount) $reportIndex
                 continue
             }
 
@@ -272,6 +302,7 @@ function Export-PSNessusReportMatrix {
                         Reason        = 'No distinct plugin hashes were produced for the report.'
                     })
                 Write-Verbose ("Skipping '{0}' because no plugin hashes were produced." -f $resolvedDefinition.Name)
+                & $updateOverallProgress ("Skipped {0} ({1}/{2})" -f $resolvedDefinition.Name, $reportIndex, $reportCount) $reportIndex
                 continue
             }
 
@@ -329,6 +360,10 @@ function Export-PSNessusReportMatrix {
                 $null = $worksheetNames.Add($worksheetName)
                 $worksheet.Name = $worksheetName
 
+                do {
+                    [int]$reportProgressId = Get-Random -Minimum 1 -Maximum ([int]::MaxValue)
+                } while ($reportProgressId -eq $overallProgressId)
+
                 Set-WorksheetContent -Worksheet $worksheet `
                     -Definition $resolvedDefinition `
                     -MetadataColumns $metadataColumns `
@@ -336,7 +371,10 @@ function Export-PSNessusReportMatrix {
                     -Hosts $hosts `
                     -HostMap $hostMap `
                     -MatchTable $matchTable `
-                    -OutputLookup $outputLookup
+                    -OutputLookup $outputLookup `
+                    -ProgressId $reportProgressId `
+                    -ProgressParentId $overallProgressId `
+                    -ProgressActivity ("Report: {0}" -f $resolvedDefinition.Name)
 
                 $null = $results.Add([pscustomobject]@{
                         Name          = $resolvedDefinition.Name
@@ -347,6 +385,7 @@ function Export-PSNessusReportMatrix {
                         Reason        = $null
                     })
 
+                & $updateOverallProgress ("Completed {0} ({1}/{2})" -f $resolvedDefinition.Name, $reportIndex, $reportCount) $reportIndex
                 $processedSheets++
             }
             finally {
@@ -356,6 +395,8 @@ function Export-PSNessusReportMatrix {
                 }
             }
         }
+
+        & $updateOverallProgress 'Saving workbook...' $reportCount
 
         if ($processedSheets -eq 0) {
             throw 'No worksheets were created because every definition was skipped.'
@@ -390,6 +431,10 @@ function Export-PSNessusReportMatrix {
 
         if ($context) {
             Close-PSNessusDbContext -Context $context
+        }
+
+        if ($overallProgressId) {
+            Write-Progress -Id $overallProgressId -Activity $overallActivity -Completed
         }
     }
 
@@ -695,8 +740,32 @@ function Set-WorksheetContent {
         [object]$MatchTable,
 
         [Parameter()]
-        [hashtable]$OutputLookup
+        [hashtable]$OutputLookup,
+
+        [Parameter()]
+        [int]$ProgressId,
+
+        [Parameter()]
+        [int]$ProgressParentId,
+
+        [Parameter()]
+        [string]$ProgressActivity
     )
+
+    $progressParams = $null
+    $progressEnabled = ($PSBoundParameters.ContainsKey('ProgressId') -and $ProgressId -gt 0 -and -not [string]::IsNullOrWhiteSpace($ProgressActivity))
+    if ($progressEnabled) {
+        $progressParams = @{
+            Id       = $ProgressId
+            Activity = $ProgressActivity
+        }
+
+        if ($ProgressParentId -gt 0) {
+            $progressParams.ParentId = $ProgressParentId
+        }
+
+        Write-Progress @progressParams -Status 'Preparing worksheet layout' -PercentComplete 0
+    }
 
     $xlCenter = -4108
     $xlBottom = -4107
@@ -709,107 +778,146 @@ function Set-WorksheetContent {
     $firstHostColumnIndex = $countColumnIndex + 1
     $firstHostColumnName = Get-ExcelColumnName -ColumnIndex $firstHostColumnIndex
 
-    $Worksheet.Activate()
-    $Worksheet.Cells.Item(1, 1).Value2 = $Definition.Title
-
-    for ($index = 0; $index -lt $metadataCount; $index++) {
-        $columnName = $MetadataColumns[$index]
-        $Worksheet.Cells.Item($introOffset - 1, $index + 1).Value2 = $columnName
-    }
-
-    for ($index = 0; $index -lt $Hosts.Count; $index++) {
-        $columnIndex = $firstHostColumnIndex + $index
-        $columnLetter = Get-ExcelColumnName -ColumnIndex $columnIndex
-        $Worksheet.Cells.Item(1, $columnIndex).Value2 = $Hosts[$index].Display
-        $Worksheet.Cells.Item(2, $columnIndex).Formula = [string]::Format(
-            "=counta({0}{1}:{0}1048576)",
-            $columnLetter,
-            $introOffset
-        )
-    }
-
-    $headerRow = $Worksheet.Rows.Item('1:1')
-    $headerRow.Orientation = 90
-    $headerRow.HorizontalAlignment = $xlCenter
-    $headerRow.VerticalAlignment = $xlBottom
-
     try {
-        $headerRow.SpecialCells($xlCellTypeConstants).EntireColumn.AutoFit() | Out-Null
-    }
-    catch {
-        # SpecialCells throws when no constants exist; ignore.
-    }
+        $Worksheet.Activate()
+        $Worksheet.Cells.Item(1, 1).Value2 = $Definition.Title
 
-    foreach ($entry in $FindingsMap.GetEnumerator()) {
-        $rowIndex = $entry.Value.RowNumber + $introOffset
-        $values = $entry.Value.Values
-        for ($valueIndex = 0; $valueIndex -lt $values.Count; $valueIndex++) {
-            $cell = $Worksheet.Cells.Item($rowIndex, $valueIndex + 1)
-            $cell.Value2 = $values[$valueIndex]
-            $cell.VerticalAlignment = $xlTop
+        for ($index = 0; $index -lt $metadataCount; $index++) {
+            $columnName = $MetadataColumns[$index]
+            $Worksheet.Cells.Item($introOffset - 1, $index + 1).Value2 = $columnName
         }
 
-        $rowFormula = if ($Definition.ShowOutput) {
-            [string]::Format("=counta({0}{1}:XFD{1})", $firstHostColumnName, $rowIndex)
-        }
-        else {
-            [string]::Format("=countif({0}{1}:XFD{1},""x"")", $firstHostColumnName, $rowIndex)
-        }
-
-        $Worksheet.Cells.Item($rowIndex, $countColumnIndex).Formula = $rowFormula
-    }
-
-    Write-Verbose ("Set-WorksheetContent: Match table type {0}" -f ($MatchTable.GetType().FullName))
-    if ($MatchTable -isnot [System.Data.DataTable]) {
-        throw "MatchTable must be a System.Data.DataTable."
-    }
-
-    foreach ($row in $MatchTable.Rows) {
-        $hash = ConvertTo-ReportString -Value $row['pluginHash']
-        $hostId = $row['ID']
-
-        if (-not $hash -or $hostId -is [System.DBNull]) {
-            continue
+        for ($index = 0; $index -lt $Hosts.Count; $index++) {
+            $columnIndex = $firstHostColumnIndex + $index
+            $columnLetter = Get-ExcelColumnName -ColumnIndex $columnIndex
+            $Worksheet.Cells.Item(1, $columnIndex).Value2 = $Hosts[$index].Display
+            $Worksheet.Cells.Item(2, $columnIndex).Formula = [string]::Format(
+                "=counta({0}{1}:{0}1048576)",
+                $columnLetter,
+                $introOffset
+            )
         }
 
-        if (-not $FindingsMap.Contains($hash)) {
-            continue
+        $headerRow = $Worksheet.Rows.Item('1:1')
+        $headerRow.Orientation = 90
+        $headerRow.HorizontalAlignment = $xlCenter
+        $headerRow.VerticalAlignment = $xlBottom
+
+        try {
+            $headerRow.SpecialCells($xlCellTypeConstants).EntireColumn.AutoFit() | Out-Null
+        }
+        catch {
+            # SpecialCells throws when no constants exist; ignore.
         }
 
-        $hostKey = [string][int]$hostId
-        if (-not $HostMap.ContainsKey($hostKey)) {
-            continue
-        }
+        foreach ($entry in $FindingsMap.GetEnumerator()) {
+            $rowIndex = $entry.Value.RowNumber + $introOffset
+            $values = $entry.Value.Values
+            for ($valueIndex = 0; $valueIndex -lt $values.Count; $valueIndex++) {
+                $cell = $Worksheet.Cells.Item($rowIndex, $valueIndex + 1)
+                $cell.Value2 = $values[$valueIndex]
+                $cell.VerticalAlignment = $xlTop
+            }
 
-        $dataRowIndex = $FindingsMap[$hash].RowNumber + $introOffset
-        $dataColumnIndex = $HostMap[$hostKey] + $countColumnIndex
-
-        $value = 'x'
-        if ($Definition.ShowOutput) {
-            $lookupKey = '{0}|{1}' -f $hash, [int]$hostId
-            if ($OutputLookup -and $OutputLookup.ContainsKey($lookupKey)) {
-                $value = $OutputLookup[$lookupKey]
+            $rowFormula = if ($Definition.ShowOutput) {
+                [string]::Format("=counta({0}{1}:XFD{1})", $firstHostColumnName, $rowIndex)
             }
             else {
-                $value = 'N/A'
+                [string]::Format("=countif({0}{1}:XFD{1},""x"")", $firstHostColumnName, $rowIndex)
+            }
+
+            $Worksheet.Cells.Item($rowIndex, $countColumnIndex).Formula = $rowFormula
+        }
+
+        Write-Verbose ("Set-WorksheetContent: Match table type {0}" -f ($MatchTable.GetType().FullName))
+        if ($MatchTable -isnot [System.Data.DataTable]) {
+            throw "MatchTable must be a System.Data.DataTable."
+        }
+
+        $totalMatchRows = if ($MatchTable) { [int]$MatchTable.Rows.Count } else { 0 }
+        $rowsProcessed = 0
+        $updateInterval = if ($totalMatchRows -gt 0) { [math]::Max([int][math]::Floor($totalMatchRows / 100), 1) } else { 1 }
+
+        if ($progressEnabled) {
+            $status = if ($totalMatchRows -gt 0) {
+                "Populating findings (0/$totalMatchRows)"
+            }
+            else {
+                'No match rows to populate'
+            }
+            Write-Progress @progressParams -Status $status -PercentComplete 0
+        }
+
+        foreach ($row in $MatchTable.Rows) {
+            $hash = ConvertTo-ReportString -Value $row['pluginHash']
+            $hostId = $row['ID']
+
+            if (-not $hash -or $hostId -is [System.DBNull]) {
+                continue
+            }
+
+            if (-not $FindingsMap.Contains($hash)) {
+                continue
+            }
+
+            $hostKey = [string][int]$hostId
+            if (-not $HostMap.ContainsKey($hostKey)) {
+                continue
+            }
+
+            $dataRowIndex = $FindingsMap[$hash].RowNumber + $introOffset
+            $dataColumnIndex = $HostMap[$hostKey] + $countColumnIndex
+
+            $value = 'x'
+            if ($Definition.ShowOutput) {
+                $lookupKey = '{0}|{1}' -f $hash, [int]$hostId
+                if ($OutputLookup -and $OutputLookup.ContainsKey($lookupKey)) {
+                    $value = $OutputLookup[$lookupKey]
+                }
+                else {
+                    $value = 'N/A'
+                }
+            }
+
+            $Worksheet.Cells.Item($dataRowIndex, $dataColumnIndex).Value2 = $value
+
+            $rowsProcessed++
+            if ($progressEnabled -and $totalMatchRows -gt 0) {
+                if ($rowsProcessed -eq 1 -or $rowsProcessed -eq $totalMatchRows -or ($rowsProcessed % $updateInterval -eq 0)) {
+                    $percentComplete = [int][math]::Round(($rowsProcessed / $totalMatchRows) * 100, 0)
+                    $status = "Populating findings ({0}/{1})" -f $rowsProcessed, $totalMatchRows
+                    Write-Progress @progressParams -Status $status -PercentComplete $percentComplete
+                }
             }
         }
 
-        $Worksheet.Cells.Item($dataRowIndex, $dataColumnIndex).Value2 = $value
+        if ($progressEnabled -and $totalMatchRows -eq 0) {
+            Write-Progress @progressParams -Status 'Worksheet populated (no findings rows)' -PercentComplete 100
+        }
+        elseif ($progressEnabled -and $totalMatchRows -gt 0 -and $rowsProcessed -lt $totalMatchRows) {
+            $percentComplete = [int][math]::Round(($rowsProcessed / $totalMatchRows) * 100, 0)
+            Write-Progress @progressParams -Status ("Populating findings ({0}/{1})" -f $rowsProcessed, $totalMatchRows) -PercentComplete $percentComplete
+        }
+
+        $null = $Worksheet.Rows.Item(([string]::Format("{0}:{0}", $introOffset))).AutoFilter()
+
+        $window = $Worksheet.Parent.Application.ActiveWindow
+        $window.SplitRow = $introOffset
+        $window.SplitColumn = $countColumnIndex
+        $window.FreezePanes = $true
+
+        $titleRange = $Worksheet.Range('A1')
+        $titleRange.HorizontalAlignment = -4131
+        $titleRange.VerticalAlignment = $xlCenter
+        $titleRange.Font.Size = 24
+        $titleRange.Font.Bold = $true
     }
-
-    $null = $Worksheet.Rows.Item(([string]::Format("{0}:{0}", $introOffset))).AutoFilter()
-
-    $window = $Worksheet.Parent.Application.ActiveWindow
-    $window.SplitRow = $introOffset
-    $window.SplitColumn = $countColumnIndex
-    $window.FreezePanes = $true
-
-    $titleRange = $Worksheet.Range('A1')
-    $titleRange.HorizontalAlignment = -4131
-    $titleRange.VerticalAlignment = $xlCenter
-    $titleRange.Font.Size = 24
-    $titleRange.Font.Bold = $true
+    finally {
+        if ($progressEnabled) {
+            Write-Progress @progressParams -Status 'Worksheet population complete' -PercentComplete 100
+            Write-Progress @progressParams -Completed
+        }
+    }
 }
 
 function Get-SafeWorksheetName {
@@ -969,4 +1077,3 @@ function Get-ExcelColumnName {
 
     return $columnName
 }
-

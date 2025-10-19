@@ -105,7 +105,8 @@ function Import-PSNessusDB {
             throw "Fatal Error, Exiting"
         }
 
-        [int]$transactionBatchSize = 50
+        # Commit each host in its own transaction to tighten failure isolation.
+        [int]$transactionBatchSize = 1
         $script:TotalStopwatch = [Diagnostics.Stopwatch]::new()
         $script:HostStopwatch = [Diagnostics.Stopwatch]::new()
     }
@@ -238,9 +239,12 @@ function Import-PSNessusDB {
                 if ($transactionBatchSize -gt 0 -and $hostsInBatch -ge $transactionBatchSize) {
                     Complete-PSNessusDbTransaction -Context $script:DbContext
                     $transactionActive = $false
-                    Start-PSNessusDbTransaction -Context $script:DbContext | Out-Null
-                    $transactionActive = $true
                     $hostsInBatch = 0
+
+                    if ($index -lt $offsets.Count - 1) {
+                        Start-PSNessusDbTransaction -Context $script:DbContext | Out-Null
+                        $transactionActive = $true
+                    }
                 }
             }
 
