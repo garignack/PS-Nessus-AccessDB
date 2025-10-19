@@ -777,17 +777,21 @@ function Set-WorksheetContent {
     $countColumnIndex = $metadataCount + 1
     $firstHostColumnIndex = $countColumnIndex + 1
     $firstHostColumnName = Get-ExcelColumnName -ColumnIndex $firstHostColumnIndex
+    $findingCount = [int]$FindingsMap.Count
+    $hostCount = [int]$Hosts.Count
 
     try {
         $Worksheet.Activate()
         $Worksheet.Cells.Item(1, 1).Value2 = $Definition.Title
 
-        for ($index = 0; $index -lt $metadataCount; $index++) {
-            $columnName = $MetadataColumns[$index]
-            $Worksheet.Cells.Item($introOffset - 1, $index + 1).Value2 = $columnName
+        if ($metadataCount -gt 0) {
+            for ($index = 0; $index -lt $metadataCount; $index++) {
+                $columnName = $MetadataColumns[$index]
+                $Worksheet.Cells.Item($introOffset - 1, $index + 1).Value2 = $columnName
+            }
         }
 
-        for ($index = 0; $index -lt $Hosts.Count; $index++) {
+        for ($index = 0; $index -lt $hostCount; $index++) {
             $columnIndex = $firstHostColumnIndex + $index
             $columnLetter = Get-ExcelColumnName -ColumnIndex $columnIndex
             $Worksheet.Cells.Item(1, $columnIndex).Value2 = $Hosts[$index].Display
@@ -810,23 +814,37 @@ function Set-WorksheetContent {
             # SpecialCells throws when no constants exist; ignore.
         }
 
-        foreach ($entry in $FindingsMap.GetEnumerator()) {
-            $rowIndex = $entry.Value.RowNumber + $introOffset
-            $values = $entry.Value.Values
-            for ($valueIndex = 0; $valueIndex -lt $values.Count; $valueIndex++) {
-                $cell = $Worksheet.Cells.Item($rowIndex, $valueIndex + 1)
-                $cell.Value2 = $values[$valueIndex]
-                $cell.VerticalAlignment = $xlTop
-            }
+        if ($findingCount -gt 0) {
+            # Placeholder to keep structure; formulas will be written per-row for clarity.
+        }
 
-            $rowFormula = if ($Definition.ShowOutput) {
-                [string]::Format("=counta({0}{1}:XFD{1})", $firstHostColumnName, $rowIndex)
-            }
-            else {
-                [string]::Format("=countif({0}{1}:XFD{1},""x"")", $firstHostColumnName, $rowIndex)
-            }
+        if ($findingCount -gt 0) {
+            foreach ($entry in $FindingsMap.GetEnumerator()) {
+                $rowNumber = [int]$entry.Value.RowNumber
+                $rowIndex = $rowNumber - 1
+                $values = $entry.Value.Values
 
-            $Worksheet.Cells.Item($rowIndex, $countColumnIndex).Formula = $rowFormula
+                $excelRowIndex = $rowNumber + ($introOffset - 1)
+
+                for ($valueIndex = 0; $valueIndex -lt $metadataCount; $valueIndex++) {
+                    $targetColumn = $valueIndex + 1
+                    $cellValue = ''
+                    if ($values -and $valueIndex -lt $values.Count -and $null -ne $values[$valueIndex]) {
+                        $cellValue = [string]$values[$valueIndex]
+                    }
+
+                    $cell = $Worksheet.Cells.Item($excelRowIndex, $targetColumn)
+                    $cell.Value2 = $cellValue
+                    $cell.VerticalAlignment = $xlTop
+                }
+                $formulaValue = if ($Definition.ShowOutput) {
+                    [string]::Format("=counta({0}{1}:XFD{1})", $firstHostColumnName, $excelRowIndex)
+                }
+                else {
+                    [string]::Format("=countif({0}{1}:XFD{1},""x"")", $firstHostColumnName, $excelRowIndex)
+                }
+                $Worksheet.Cells.Item($excelRowIndex, $countColumnIndex).Formula = $formulaValue
+            }
         }
 
         Write-Verbose ("Set-WorksheetContent: Match table type {0}" -f ($MatchTable.GetType().FullName))
@@ -837,6 +855,15 @@ function Set-WorksheetContent {
         $totalMatchRows = if ($MatchTable) { [int]$MatchTable.Rows.Count } else { 0 }
         $rowsProcessed = 0
         $updateInterval = if ($totalMatchRows -gt 0) { [math]::Max([int][math]::Floor($totalMatchRows / 100), 1) } else { 1 }
+        $maxMatrixCells = 20000000
+        $useHostMatrix = ($findingCount -gt 0 -and $hostCount -gt 0 -and ([int64]$findingCount * [int64]$hostCount) -le $maxMatrixCells)
+        $hostColumnArrays = $null
+        if ($useHostMatrix) {
+            $hostColumnArrays = @{}
+            for ($col = 1; $col -le $hostCount; $col++) {
+                $hostColumnArrays[$col] = [object[]]::new($findingCount)
+            }
+        }
 
         if ($progressEnabled) {
             $status = if ($totalMatchRows -gt 0) {
@@ -865,8 +892,11 @@ function Set-WorksheetContent {
                 continue
             }
 
-            $dataRowIndex = $FindingsMap[$hash].RowNumber + $introOffset
-            $dataColumnIndex = $HostMap[$hostKey] + $countColumnIndex
+            $rowNumber = [int]$FindingsMap[$hash].RowNumber
+            $rowIndex = $rowNumber - 1
+            $excelRowIndex = $rowNumber + ($introOffset - 1)
+            $columnOrdinal = [int]$HostMap[$hostKey]
+            $columnIndex = $columnOrdinal - 1
 
             $value = 'x'
             if ($Definition.ShowOutput) {
@@ -879,7 +909,20 @@ function Set-WorksheetContent {
                 }
             }
 
-            $Worksheet.Cells.Item($dataRowIndex, $dataColumnIndex).Value2 = $value
+            if ($null -eq $value) {
+                $value = ''
+            }
+            else {
+                $value = [string]$value
+            }
+
+            if ($useHostMatrix) {
+                $hostColumnArrays[$columnOrdinal][$rowIndex] = $value
+            }
+            else {
+                $dataColumnIndex = $columnOrdinal + $countColumnIndex
+                $Worksheet.Cells.Item($excelRowIndex, $dataColumnIndex).Value2 = $value
+            }
 
             $rowsProcessed++
             if ($progressEnabled -and $totalMatchRows -gt 0) {
@@ -887,6 +930,21 @@ function Set-WorksheetContent {
                     $percentComplete = [int][math]::Round(($rowsProcessed / $totalMatchRows) * 100, 0)
                     $status = "Populating findings ({0}/{1})" -f $rowsProcessed, $totalMatchRows
                     Write-Progress @progressParams -Status $status -PercentComplete $percentComplete
+                }
+            }
+        }
+
+        if ($useHostMatrix -and $hostColumnArrays) {
+            foreach ($columnOrdinal in $hostColumnArrays.Keys) {
+                $columnIndex = $firstHostColumnIndex + ($columnOrdinal - 1)
+                $columnRange = $Worksheet.Cells.Item($introOffset, $columnIndex).Resize($findingCount, 1)
+                $columnData = $hostColumnArrays[$columnOrdinal]
+                if ($findingCount -eq 1) {
+                    $columnRange.Value2 = $columnData[0]
+                }
+                else {
+                    $application = $Worksheet.Parent.Application
+                    $columnRange.Value = $application.WorksheetFunction.Transpose($columnData)
                 }
             }
         }
@@ -899,11 +957,17 @@ function Set-WorksheetContent {
             Write-Progress @progressParams -Status ("Populating findings ({0}/{1})" -f $rowsProcessed, $totalMatchRows) -PercentComplete $percentComplete
         }
 
-        $null = $Worksheet.Rows.Item(([string]::Format("{0}:{0}", $introOffset))).AutoFilter()
+        if ($findingCount -gt 0) {
+            $findingsRowRange = $Worksheet.Rows.Item(("{0}:{1}" -f $introOffset, ($introOffset + $findingCount - 1)))
+            $findingsRowRange.RowHeight = 16
+        }
+
+        $null = $Worksheet.Rows.Item('2:2').AutoFilter()
 
         $window = $Worksheet.Parent.Application.ActiveWindow
-        $window.SplitRow = $introOffset
-        $window.SplitColumn = $countColumnIndex
+        $window.SplitRow = $introOffset - 1
+        if ($window.SplitRow -lt 0) { $window.SplitRow = 0 }
+        $window.SplitColumn = [math]::Max($firstHostColumnIndex - 1, 0)
         $window.FreezePanes = $true
 
         $titleRange = $Worksheet.Range('A1')

@@ -2,4 +2,4 @@
 
 ## Database
 - [x] Provide SQLite schema (`schema_sqlite.sql`) and `-NewDb` support via AccessProvider / Import-PSNessusDB.
-- [ ] Validate SQLite import parity against Access using Newest_Export.nessus once sample file is available.
+- [x] Validate SQLite import parity against Access using Newest_Export.nessus once sample file is available.
