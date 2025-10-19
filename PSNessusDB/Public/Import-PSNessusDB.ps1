@@ -37,6 +37,7 @@ function Import-PSNessusDB {
     )
 
     begin {
+        # Resolve upfront parameters and establish logging/database context before streaming hosts.
         $moduleRoot = $PSScriptRoot
 
         if ($NewDb -and $Provider -eq 'Access') {
@@ -80,6 +81,7 @@ function Import-PSNessusDB {
         try {
             $script:ImportLog = New-LogFile -Name 'Import-PSNessusDB' -Path $LogFileName -LogLevel $loggingLevel
             $script:ImportLog.Info("Log FileName: $LogFileName")
+            $script:ImportLog.Debug("Resolved database path: $resolvedDatabasePath | Provider: $Provider | Logging level: $loggingLevel")
         }
         catch {
             Write-Host 'Error Creating PS-Log Object'
@@ -89,6 +91,7 @@ function Import-PSNessusDB {
 
         try {
             $script:DbContext = New-PSNessusDbContext -Path $resolvedDatabasePath -Provider $Provider -NewDb:$NewDb
+            $script:ImportLog.Debug("Database context created. NewDb: $NewDb | Connection: $($script:DbContext.Connection.GetType().FullName)")
         }
         catch {
             $script:ImportLog.Fatal("Cannot connect to database $resolvedDatabasePath", $_)
@@ -98,6 +101,7 @@ function Import-PSNessusDB {
 
         try {
             Initialize-FileCutter
+            $script:ImportLog.Debug('Initialized PSNessusDB.Cutter for high-speed chunking.')
         }
         catch {
             $script:ImportLog.Debug($_.Exception.ToString())
@@ -116,6 +120,7 @@ function Import-PSNessusDB {
         $script:TotalStopwatch.Start()
 
         $resolvedFullName = (Resolve-Path -Path $FullName).ProviderPath
+        $script:ImportLog.Debug("Starting import for file: $resolvedFullName")
         $script:ImportLog.Info('-----------------------------')
         $script:ImportLog.Info("Processing File: {0}" -f [System.IO.Path]::GetFileName($resolvedFullName))
         $script:ImportLog.Info('-----------------------------')
@@ -199,6 +204,7 @@ function Import-PSNessusDB {
             $fileColumns = @('reportName', 'FileLoc', 'FileName', 'ImportDate')
             $fileValues = @($reportName, $resolvedFullName, (Split-Path -Path $resolvedFullName -Leaf), (Get-Date))
             $fileId = Add-PSNessusDbRecord -Context $script:DbContext -Table 'Files' -Columns $fileColumns -Values $fileValues
+            $script:ImportLog.Debug("Created Files row ID $fileId for report '$reportName'.")
 
             for ($index = 0; $index -le $offsets.Count - 1; $index++) {
                 $script:HostStopwatch.Reset()
@@ -244,6 +250,7 @@ function Import-PSNessusDB {
                     if ($index -lt $offsets.Count - 1) {
                         Start-PSNessusDbTransaction -Context $script:DbContext | Out-Null
                         $transactionActive = $true
+                        $script:ImportLog.Debug("Committed host batch at index $index. Restarting transaction for remaining hosts.")
                     }
                 }
             }
@@ -251,12 +258,14 @@ function Import-PSNessusDB {
             if ($transactionActive) {
                 Complete-PSNessusDbTransaction -Context $script:DbContext
                 $transactionActive = $false
+                $script:ImportLog.Debug('Final host transaction committed.')
             }
         }
         catch {
             if ($transactionActive) {
                 Rollback-PSNessusDbTransaction -Context $script:DbContext
                 $transactionActive = $false
+                $script:ImportLog.Debug('Rolled back active transaction due to exception.')
             }
             throw
         }
@@ -275,6 +284,7 @@ function Import-PSNessusDB {
 
         $script:ImportLog.Info('-----------------------------')
         $script:ImportLog.Info("Completed: $reportName")
+        $script:ImportLog.Debug("Hosts processed: $hostsProcessed | Timings recorded: $($timings.Count)")
         $script:ImportLog.Info("Host Avg: $average ms")
         $script:ImportLog.Info("Host Min: $minimum ms")
         $script:ImportLog.Info("Host Max: $maximum ms")

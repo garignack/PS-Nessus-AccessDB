@@ -31,6 +31,7 @@ function Add-PSNessusHostRecord {
         }
     }
 
+    # Ensure the shared plugin cache exists so duplicate plugin metadata stays de-duplicated throughout the import.
     if (-not ($DbContext.PSObject.Properties.Name -contains 'PluginCache')) {
         Add-Member -InputObject $DbContext -NotePropertyName PluginCache -NotePropertyValue @{} -Force
     }
@@ -45,6 +46,7 @@ function Add-PSNessusHostRecord {
 
     Invoke-Logger -Logger $Logger -Method 'Info' -Message ("Importing host '{0}'" -f $XmlHost.ReportHost.name) -Source $logSource
 
+    # Walk the HostProperties collection and classify enumerated ports vs tags that belong in HostTags.
     foreach ($tag in $XmlHost.ReportHost.HostProperties.tag) {
         switch -Wildcard ($tag.name) {
             'enumerated-ports-*' {
@@ -84,6 +86,7 @@ function Add-PSNessusHostRecord {
     $hostId = Add-PSNessusDbRecord -Context $DbContext -Table 'Hosts' -Columns $hostColumns -Values $hostValues
 
     Invoke-Logger -Logger $Logger -Method 'Debug' -Message ("Host '{0}' imported as ID {1}" -f $XmlHost.ReportHost.name, $hostId) -Source $logSource
+    Invoke-Logger -Logger $Logger -Method 'Debug' -Message ("Captured {0} enumerated ports and {1} host tags for host ID {2}" -f $enumeratedPorts.Count, $hostTags.Count, $hostId) -Source $logSource
 
     if ($enumeratedPorts.Count -gt 0) {
         Ensure-HostEnumeratedPortsTable -Connection $DbContext.Connection
@@ -157,20 +160,22 @@ function Add-PSNessusHostRecord {
                 switch -Wildcard ($child.name) {
                     'plugin_output' {
                         $reportColumns += $child.name
-                        $reportValues += (ConvertTo-PSNessusDbValue -Value ([string]$child.'#text') -Provider $DbContext.Provider)
-                    }
-                    'cm:compliance-result' {
-                        $reportColumns += $child.name
-                        $reportValues += (ConvertTo-PSNessusDbValue -Value ([string]$child.'#text') -Provider $DbContext.Provider)
-                    }
-                    'cm:compliance-actual-value' {
-                        $reportColumns += $child.name
-                        $reportValues += (ConvertTo-PSNessusDbValue -Value ([string]$child.'#text') -Provider $DbContext.Provider)
-                    }
-                    default {
-                        if ($pluginColumns -notcontains $child.name) {
-                            $pluginColumns += $child.name
-                            $pluginValues += (ConvertTo-PSNessusDbValue -Value ([string]$child.'#text') -Provider $DbContext.Provider)
+                    $reportValues += (ConvertTo-PSNessusDbValue -Value ([string]$child.'#text') -Provider $DbContext.Provider)
+                }
+                'cm:compliance-result' {
+                    $reportColumns += $child.name
+                    $reportValues += (ConvertTo-PSNessusDbValue -Value ([string]$child.'#text') -Provider $DbContext.Provider)
+                    Invoke-Logger -Logger $Logger -Method 'Debug' -Message ("Compliance result detected for plugin {0}" -f $reportItem.PluginID) -Source $logSource
+                }
+                'cm:compliance-actual-value' {
+                    $reportColumns += $child.name
+                    $reportValues += (ConvertTo-PSNessusDbValue -Value ([string]$child.'#text') -Provider $DbContext.Provider)
+                    Invoke-Logger -Logger $Logger -Method 'Debug' -Message ("Compliance actual value detected for plugin {0}" -f $reportItem.PluginID) -Source $logSource
+                }
+                default {
+                    if ($pluginColumns -notcontains $child.name) {
+                        $pluginColumns += $child.name
+                        $pluginValues += (ConvertTo-PSNessusDbValue -Value ([string]$child.'#text') -Provider $DbContext.Provider)
                         }
                         else {
                             for ($index = 0; $index -lt $pluginColumns.Count; $index++) {
@@ -205,16 +210,19 @@ function Add-PSNessusHostRecord {
             if ($reportItem.plugin_output) {
                 $reportColumns += 'plugin_output'
                 $reportValues += (ConvertTo-PSNessusDbValue -Value ([string]$reportItem.plugin_output) -Provider $DbContext.Provider)
+                Invoke-Logger -Logger $Logger -Method 'Debug' -Message ("Plugin output captured for plugin ID {0}" -f $reportItem.PluginID) -Source $logSource
             }
 
             if ($reportItem.'cm:compliance-result') {
                 $reportColumns += 'cm:compliance-result'
                 $reportValues += (ConvertTo-PSNessusDbValue -Value ([string]$reportItem.'cm:compliance-result') -Provider $DbContext.Provider)
+                Invoke-Logger -Logger $Logger -Method 'Debug' -Message ("Compliance result reused for plugin {0}" -f $reportItem.PluginID) -Source $logSource
             }
 
             if ($reportItem.'cm:compliance-actual-value') {
                 $reportColumns += 'cm:compliance-actual-value'
                 $reportValues += (ConvertTo-PSNessusDbValue -Value ([string]$reportItem.'cm:compliance-actual-value') -Provider $DbContext.Provider)
+                Invoke-Logger -Logger $Logger -Method 'Debug' -Message ("Compliance actual value reused for plugin {0}" -f $reportItem.PluginID) -Source $logSource
             }
         }
 
