@@ -867,6 +867,8 @@ function ConvertTo-PSNessusDbValue {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
+        [AllowNull()]
+        [AllowEmptyString()]
         [string]$Value,
 
         [string]$Provider = 'Access'

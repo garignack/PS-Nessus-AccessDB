@@ -100,7 +100,6 @@ function Import-PSNessusDB {
         }
 
         # Commit each host in its own transaction to tighten failure isolation.
-        [int]$transactionBatchSize = 1
         $script:TotalStopwatch = [Diagnostics.Stopwatch]::new()
         $script:HostStopwatch = [Diagnostics.Stopwatch]::new()
     }
@@ -151,10 +150,11 @@ function Import-PSNessusDB {
 
         $timings = @()
         [int]$hostsProcessed = 0
+        [int]$hostsFailed = 0
+        $failedHosts = New-Object 'System.Collections.Generic.List[string]'
 
         $initialPercent = if ($totalHosts -gt 0) { ($hostsProcessed / [double]$totalHosts) * 100 } else { 100 }
-        Write-Progress -Activity "Processing $reportName" -Status "Hosts: $hostsProcessed / $totalHosts" -PercentComplete $initialPercent
-        [int]$hostsInBatch = 0
+        Write-Progress -Activity "Processing $reportName" -Status "Succeeded: $hostsProcessed | Failed: $hostsFailed / $totalHosts" -PercentComplete $initialPercent
         $transactionActive = $false
 
         try {
@@ -165,51 +165,64 @@ function Import-PSNessusDB {
             $fileValues = @($reportName, $resolvedFullName, (Split-Path -Path $resolvedFullName -Leaf), (Get-Date))
             $fileId = Add-PSNessusDbRecord -Context $script:DbContext -Table 'Files' -Columns $fileColumns -Values $fileValues
             $script:ImportLog.Debug("Created Files row ID $fileId for report '$reportName'.")
+            Complete-PSNessusDbTransaction -Context $script:DbContext
+            $transactionActive = $false
 
             foreach ($hostEntry in Get-NessusReportHosts -Path $resolvedFullName) {
                 $script:HostStopwatch.Reset()
                 $script:HostStopwatch.Start()
+                $hostLabel = "Index {0}" -f $hostEntry.Index
 
                 try {
                     $xmlHost = $hostEntry.Xml
+                    if ($xmlHost -and $xmlHost.ReportHost -and $xmlHost.ReportHost.name) {
+                        $hostLabel = [string]$xmlHost.ReportHost.name
+                    }
                 }
                 catch {
                     $script:ImportLog.Error("Error processing ReportHost entry at index $($hostEntry.Index)", $_)
                     $script:ImportLog.Debug($_.Exception.ToString())
+                    $hostsFailed++
+                    $failedHosts.Add($hostLabel) | Out-Null
+                    $script:HostStopwatch.Stop()
+                    $percentComplete = if ($totalHosts -gt 0) { (($hostsProcessed + $hostsFailed) / [double]$totalHosts) * 100 } else { 100 }
+                    Write-Progress -Activity "Processing $reportName" -Status "Succeeded: $hostsProcessed | Failed: $hostsFailed / $totalHosts" -PercentComplete $percentComplete
                     continue
                 }
 
                 $script:ImportLog.Verbose("Host retrieval: $($script:HostStopwatch.ElapsedMilliseconds)ms")
                 $script:ImportLog.Info("Processing[$($hostEntry.Index)] : $($xmlHost.ReportHost.name)")
 
-                Add-PSNessusHostRecord -XmlHost $xmlHost -DbContext $script:DbContext -FileId $fileId -Logger $script:ImportLog
+                try {
+                    Start-PSNessusDbTransaction -Context $script:DbContext | Out-Null
+                    $transactionActive = $true
 
-                $hostsProcessed++
-                $hostsInBatch++
-                $script:HostStopwatch.Stop()
-                $timings += $script:HostStopwatch.Elapsed
-                $script:ImportLog.Verbose("Host Time: $($script:HostStopwatch.ElapsedMilliseconds)ms")
+                    Add-PSNessusHostRecord -XmlHost $xmlHost -DbContext $script:DbContext -FileId $fileId -Logger $script:ImportLog
 
-                $percentComplete = if ($totalHosts -gt 0) { ($hostsProcessed / [double]$totalHosts) * 100 } else { 100 }
-                Write-Progress -Activity "Processing $reportName" -Status "Hosts: $hostsProcessed / $totalHosts" -PercentComplete $percentComplete
-
-                if ($transactionBatchSize -gt 0 -and $hostsInBatch -ge $transactionBatchSize) {
                     Complete-PSNessusDbTransaction -Context $script:DbContext
                     $transactionActive = $false
-                    $hostsInBatch = 0
 
-                    if ($hostsProcessed -lt $totalHosts) {
-                        Start-PSNessusDbTransaction -Context $script:DbContext | Out-Null
-                        $transactionActive = $true
-                        $script:ImportLog.Debug("Committed host batch at host index $($hostEntry.Index). Restarting transaction for remaining hosts.")
-                    }
+                    $hostsProcessed++
+                    $script:HostStopwatch.Stop()
+                    $timings += $script:HostStopwatch.Elapsed
+                    $script:ImportLog.Verbose("Host Time: $($script:HostStopwatch.ElapsedMilliseconds)ms")
                 }
-            }
+                catch {
+                    if ($transactionActive) {
+                        Rollback-PSNessusDbTransaction -Context $script:DbContext
+                        $transactionActive = $false
+                        $script:ImportLog.Debug("Rolled back failed host transaction for '$hostLabel'.")
+                    }
 
-            if ($transactionActive) {
-                Complete-PSNessusDbTransaction -Context $script:DbContext
-                $transactionActive = $false
-                $script:ImportLog.Debug('Final host transaction committed.')
+                    $hostsFailed++
+                    $failedHosts.Add($hostLabel) | Out-Null
+                    $script:HostStopwatch.Stop()
+                    $script:ImportLog.Error("Host import failed for '$hostLabel' at ReportHost index $($hostEntry.Index). Continuing with remaining hosts.", $_)
+                    $script:ImportLog.Debug($_.Exception.ToString())
+                }
+
+                $percentComplete = if ($totalHosts -gt 0) { (($hostsProcessed + $hostsFailed) / [double]$totalHosts) * 100 } else { 100 }
+                Write-Progress -Activity "Processing $reportName" -Status "Succeeded: $hostsProcessed | Failed: $hostsFailed / $totalHosts" -PercentComplete $percentComplete
             }
         }
         catch {
@@ -235,14 +248,18 @@ function Import-PSNessusDB {
 
         $script:ImportLog.Info('-----------------------------')
         $script:ImportLog.Info("Completed: $reportName")
-        $script:ImportLog.Debug("Hosts processed: $hostsProcessed | Timings recorded: $($timings.Count)")
+        $script:ImportLog.Debug("Hosts succeeded: $hostsProcessed | Hosts failed: $hostsFailed | Timings recorded: $($timings.Count)")
         $script:ImportLog.Info("Host Avg: $average ms")
         $script:ImportLog.Info("Host Min: $minimum ms")
         $script:ImportLog.Info("Host Max: $maximum ms")
         $script:ImportLog.Info("Parsing Total: $($script:TotalStopwatch.Elapsed)")
+        if ($hostsFailed -gt 0) {
+            $failedHostPreview = ($failedHosts | Select-Object -First 10) -join ', '
+            $script:ImportLog.Warn("Host failures: $hostsFailed of $totalHosts. Failed hosts (first 10): $failedHostPreview")
+        }
         $script:ImportLog.Info('-----------------------------')
 
-        Write-Progress -Activity "Processing $reportName" -Status "Hosts: $hostsProcessed / $totalHosts" -Completed
+        Write-Progress -Activity "Processing $reportName" -Status "Succeeded: $hostsProcessed | Failed: $hostsFailed / $totalHosts" -Completed
     }
 
     end {

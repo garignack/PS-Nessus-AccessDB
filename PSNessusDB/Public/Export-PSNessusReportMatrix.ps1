@@ -519,6 +519,7 @@ SELECT DISTINCT Hosts.ID, $nameExpression
 FROM Hosts
 INNER JOIN ReportItem ON Hosts.ID = ReportItem.HostID
 INNER JOIN PluginInfo ON PluginInfo.ID = ReportItem.PID
+LEFT JOIN HostTags ON HostTags.HostID = Hosts.ID
 WHERE ($($Definition.WhereClause));
 "@
 
@@ -577,6 +578,7 @@ SELECT DISTINCT $($Definition.PluginHash) AS pluginHash, $($Definition.Columns)
 FROM PluginInfo
 INNER JOIN ReportItem ON PluginInfo.ID = ReportItem.PID
 INNER JOIN Hosts ON Hosts.ID = ReportItem.HostID
+LEFT JOIN HostTags ON HostTags.HostID = Hosts.ID
 WHERE ($($Definition.WhereClause));
 "@
 
@@ -598,6 +600,7 @@ SELECT DISTINCT $($Definition.PluginHash) AS pluginHash, Hosts.ID
 FROM PluginInfo
 INNER JOIN ReportItem ON PluginInfo.ID = ReportItem.PID
 INNER JOIN Hosts ON Hosts.ID = ReportItem.HostID
+LEFT JOIN HostTags ON HostTags.HostID = Hosts.ID
 WHERE ($($Definition.WhereClause));
 "@
 
@@ -619,6 +622,7 @@ SELECT $($Definition.PluginHash) AS pluginHash, Hosts.ID, ReportItem.plugin_outp
 FROM PluginInfo
 INNER JOIN ReportItem ON PluginInfo.ID = ReportItem.PID
 INNER JOIN Hosts ON Hosts.ID = ReportItem.HostID
+LEFT JOIN HostTags ON HostTags.HostID = Hosts.ID
 WHERE ($($Definition.WhereClause));
 "@
 
@@ -686,6 +690,7 @@ SELECT TOP 1 $ColumnName
 FROM PluginInfo
 INNER JOIN ReportItem ON PluginInfo.ID = ReportItem.PID
 INNER JOIN Hosts ON Hosts.ID = ReportItem.HostID
+LEFT JOIN HostTags ON HostTags.HostID = Hosts.ID
 WHERE (($($Definition.PluginHash)) = ("$escapedHash"));
 "@
     }
@@ -695,6 +700,7 @@ SELECT $ColumnName
 FROM PluginInfo
 INNER JOIN ReportItem ON PluginInfo.ID = ReportItem.PID
 INNER JOIN Hosts ON Hosts.ID = ReportItem.HostID
+LEFT JOIN HostTags ON HostTags.HostID = Hosts.ID
 WHERE (($($Definition.PluginHash)) = ('$escapedHash'))
 LIMIT 1;
 "@
