@@ -51,18 +51,46 @@ function Export-PSNessusAccessDatabase {
     $sqliteContext = $null
     $accessContext = $null
     try {
-        $sqliteContext = New-PSNessusDbContext -Path $resolvedSqlitePath -Provider 'SQLite'
-        $accessContext = New-PSNessusDbContext -Path $resolvedOutputPath -Provider 'Access'
+        try {
+            $sqliteContext = New-PSNessusDbContext -Path $resolvedSqlitePath -Provider 'SQLite'
+            $accessContext = New-PSNessusDbContext -Path $resolvedOutputPath -Provider 'Access'
+        }
+        catch {
+            $message = "Failed to initialize export contexts. SQLite='$resolvedSqlitePath', Access='$resolvedOutputPath'."
+            Write-Error $message
+            Write-Verbose $_.Exception.ToString()
+            throw "$message $($_.Exception.Message)"
+        }
 
-        $summary = Invoke-PSNessusSqliteToAccessExport -SourceContext $sqliteContext -TargetContext $accessContext
+        try {
+            $summary = Invoke-PSNessusSqliteToAccessExport -SourceContext $sqliteContext -TargetContext $accessContext
+        }
+        catch {
+            $message = "Access export failed. SQLite='$resolvedSqlitePath', Template='$resolvedTemplatePath', Output='$resolvedOutputPath'."
+            Write-Error $message
+            Write-Verbose $_.Exception.ToString()
+            throw "$message $($_.Exception.Message)"
+        }
         return $summary
     }
     finally {
         if ($accessContext) {
-            Close-PSNessusDbContext -Context $accessContext
+            try {
+                Close-PSNessusDbContext -Context $accessContext
+            }
+            catch {
+                Write-Warning ("Failed to close Access export context for '{0}': {1}" -f $resolvedOutputPath, $_.Exception.Message)
+                Write-Verbose $_.Exception.ToString()
+            }
         }
         if ($sqliteContext) {
-            Close-PSNessusDbContext -Context $sqliteContext
+            try {
+                Close-PSNessusDbContext -Context $sqliteContext
+            }
+            catch {
+                Write-Warning ("Failed to close SQLite export context for '{0}': {1}" -f $resolvedSqlitePath, $_.Exception.Message)
+                Write-Verbose $_.Exception.ToString()
+            }
         }
     }
 }

@@ -143,6 +143,8 @@ function Export-PSNessusReportMatrix {
     $worksheet = $null
     $results = New-Object System.Collections.ArrayList
     $worksheetNames = New-Object System.Collections.ArrayList
+    $activeReportName = $null
+    $activeReportIndex = 0
 
     try {
         $context = New-PSNessusDbContext -Path $resolvedDatabasePath -Provider $Provider
@@ -175,86 +177,91 @@ function Export-PSNessusReportMatrix {
 
         foreach ($definition in $reportDefinitions) {
             $reportIndex++
-            $resolvedDefinition = Resolve-ReportDefinition -Definition $definition -Index ($processedSheets + 1)
-            $statusMessage = "Processing {0} ({1}/{2})" -f $resolvedDefinition.Name, $reportIndex, $reportCount
-            & $updateOverallProgress $statusMessage ($reportIndex - 1)
-            Write-Verbose ("Processing report '{0}'" -f $resolvedDefinition.Name)
+            $activeReportIndex = $reportIndex
+            $activeReportName = $null
+            $resolvedDefinition = $null
+            try {
+                $resolvedDefinition = Resolve-ReportDefinition -Definition $definition -Index ($processedSheets + 1)
+                $activeReportName = $resolvedDefinition.Name
+                $statusMessage = "Processing {0} ({1}/{2})" -f $resolvedDefinition.Name, $reportIndex, $reportCount
+                & $updateOverallProgress $statusMessage ($reportIndex - 1)
+                Write-Verbose ("Processing report '{0}'" -f $resolvedDefinition.Name)
 
-            $hosts = Get-ReportMatrixHosts -Definition $resolvedDefinition -Context $context
-            if ($hosts.Count -eq 0) {
-                $null = $results.Add([pscustomobject]@{
-                        Name          = $resolvedDefinition.Name
-                        WorksheetName = $null
-                        Hosts         = 0
-                        Findings      = 0
-                        Status        = 'Skipped'
-                        Reason        = 'No hosts matched the whereClause.'
-                    })
-                Write-Verbose ("Skipping '{0}' because no hosts were returned." -f $resolvedDefinition.Name)
-                & $updateOverallProgress ("Skipped {0} ({1}/{2})" -f $resolvedDefinition.Name, $reportIndex, $reportCount) $reportIndex
-                continue
-            }
-
-            $columnData = Get-ReportMatrixColumns -Definition $resolvedDefinition -Context $context
-            if ($columnData.Rows.Count -eq 0) {
-                $null = $results.Add([pscustomobject]@{
-                        Name          = $resolvedDefinition.Name
-                        WorksheetName = $null
-                        Hosts         = $hosts.Count
-                        Findings      = 0
-                        Status        = 'Skipped'
-                        Reason        = 'No plugin rows matched the whereClause.'
-                    })
-                Write-Verbose ("Skipping '{0}' because no plugin rows were returned." -f $resolvedDefinition.Name)
-                & $updateOverallProgress ("Skipped {0} ({1}/{2})" -f $resolvedDefinition.Name, $reportIndex, $reportCount) $reportIndex
-                continue
-            }
-
-            $matchTable = Get-ReportMatrixMatches -Definition $resolvedDefinition -Context $context
-            if ($matchTable.Rows.Count -eq 0) {
-                $null = $results.Add([pscustomobject]@{
-                        Name          = $resolvedDefinition.Name
-                        WorksheetName = $null
-                        Hosts         = $hosts.Count
-                        Findings      = 0
-                        Status        = 'Skipped'
-                        Reason        = 'No host/plugin combinations were found.'
-                    })
-                Write-Verbose ("Skipping '{0}' because no host/plugin combinations were returned." -f $resolvedDefinition.Name)
-                & $updateOverallProgress ("Skipped {0} ({1}/{2})" -f $resolvedDefinition.Name, $reportIndex, $reportCount) $reportIndex
-                continue
-            }
-            Write-Verbose ("Match table type: {0}" -f $matchTable.GetType().FullName)
-
-            $outputLookup = $null
-            if ($resolvedDefinition.ShowOutput) {
-                $outputLookup = Get-ReportMatrixOutputs -Definition $resolvedDefinition -Context $context
-            }
-
-            $metadataColumns = @()
-            foreach ($column in $columnData.Columns) {
-                if ($column.ColumnName -ne 'pluginHash') {
-                    $metadataColumns += $column.ColumnName
+                $hosts = Get-ReportMatrixHosts -Definition $resolvedDefinition -Context $context
+                if ($hosts.Count -eq 0) {
+                    $null = $results.Add([pscustomobject]@{
+                            Name          = $resolvedDefinition.Name
+                            WorksheetName = $null
+                            Hosts         = 0
+                            Findings      = 0
+                            Status        = 'Skipped'
+                            Reason        = 'No hosts matched the whereClause.'
+                        })
+                    Write-Verbose ("Skipping '{0}' because no hosts were returned." -f $resolvedDefinition.Name)
+                    & $updateOverallProgress ("Skipped {0} ({1}/{2})" -f $resolvedDefinition.Name, $reportIndex, $reportCount) $reportIndex
+                    continue
                 }
-            }
 
-            $metadataColumnCount = $metadataColumns.Count
-            if ($metadataColumnCount -eq 0) {
-                $null = $results.Add([pscustomobject]@{
-                        Name          = $resolvedDefinition.Name
-                        WorksheetName = $null
-                        Hosts         = $hosts.Count
-                        Findings      = 0
-                        Status        = 'Skipped'
-                        Reason        = 'No metadata columns were defined for the report.'
-                    })
-                Write-Verbose ("Skipping '{0}' because no metadata columns were defined." -f $resolvedDefinition.Name)
-                & $updateOverallProgress ("Skipped {0} ({1}/{2})" -f $resolvedDefinition.Name, $reportIndex, $reportCount) $reportIndex
-                continue
-            }
+                $columnData = Get-ReportMatrixColumns -Definition $resolvedDefinition -Context $context
+                if ($columnData.Rows.Count -eq 0) {
+                    $null = $results.Add([pscustomobject]@{
+                            Name          = $resolvedDefinition.Name
+                            WorksheetName = $null
+                            Hosts         = $hosts.Count
+                            Findings      = 0
+                            Status        = 'Skipped'
+                            Reason        = 'No plugin rows matched the whereClause.'
+                        })
+                    Write-Verbose ("Skipping '{0}' because no plugin rows were returned." -f $resolvedDefinition.Name)
+                    & $updateOverallProgress ("Skipped {0} ({1}/{2})" -f $resolvedDefinition.Name, $reportIndex, $reportCount) $reportIndex
+                    continue
+                }
 
-            $metadataMap = @{}
-            foreach ($row in $columnData.Rows) {
+                $matchTable = Get-ReportMatrixMatches -Definition $resolvedDefinition -Context $context
+                if ($matchTable.Rows.Count -eq 0) {
+                    $null = $results.Add([pscustomobject]@{
+                            Name          = $resolvedDefinition.Name
+                            WorksheetName = $null
+                            Hosts         = $hosts.Count
+                            Findings      = 0
+                            Status        = 'Skipped'
+                            Reason        = 'No host/plugin combinations were found.'
+                        })
+                    Write-Verbose ("Skipping '{0}' because no host/plugin combinations were returned." -f $resolvedDefinition.Name)
+                    & $updateOverallProgress ("Skipped {0} ({1}/{2})" -f $resolvedDefinition.Name, $reportIndex, $reportCount) $reportIndex
+                    continue
+                }
+                Write-Verbose ("Match table type: {0}" -f $matchTable.GetType().FullName)
+
+                $outputLookup = $null
+                if ($resolvedDefinition.ShowOutput) {
+                    $outputLookup = Get-ReportMatrixOutputs -Definition $resolvedDefinition -Context $context
+                }
+
+                $metadataColumns = @()
+                foreach ($column in $columnData.Columns) {
+                    if ($column.ColumnName -ne 'pluginHash') {
+                        $metadataColumns += $column.ColumnName
+                    }
+                }
+
+                $metadataColumnCount = $metadataColumns.Count
+                if ($metadataColumnCount -eq 0) {
+                    $null = $results.Add([pscustomobject]@{
+                            Name          = $resolvedDefinition.Name
+                            WorksheetName = $null
+                            Hosts         = $hosts.Count
+                            Findings      = 0
+                            Status        = 'Skipped'
+                            Reason        = 'No metadata columns were defined for the report.'
+                        })
+                    Write-Verbose ("Skipping '{0}' because no metadata columns were defined." -f $resolvedDefinition.Name)
+                    & $updateOverallProgress ("Skipped {0} ({1}/{2})" -f $resolvedDefinition.Name, $reportIndex, $reportCount) $reportIndex
+                    continue
+                }
+
+                $metadataMap = @{}
+                foreach ($row in $columnData.Rows) {
                 $hash = ConvertTo-ReportString -Value $row['pluginHash']
                 if (-not $hash) {
                     continue
@@ -292,8 +299,8 @@ function Export-PSNessusReportMatrix {
                 }
             }
 
-            if ($metadataMap.Count -eq 0) {
-                $null = $results.Add([pscustomobject]@{
+                if ($metadataMap.Count -eq 0) {
+                    $null = $results.Add([pscustomobject]@{
                         Name          = $resolvedDefinition.Name
                         WorksheetName = $null
                         Hosts         = $hosts.Count
@@ -301,13 +308,13 @@ function Export-PSNessusReportMatrix {
                         Status        = 'Skipped'
                         Reason        = 'No distinct plugin hashes were produced for the report.'
                     })
-                Write-Verbose ("Skipping '{0}' because no plugin hashes were produced." -f $resolvedDefinition.Name)
-                & $updateOverallProgress ("Skipped {0} ({1}/{2})" -f $resolvedDefinition.Name, $reportIndex, $reportCount) $reportIndex
-                continue
-            }
+                    Write-Verbose ("Skipping '{0}' because no plugin hashes were produced." -f $resolvedDefinition.Name)
+                    & $updateOverallProgress ("Skipped {0} ({1}/{2})" -f $resolvedDefinition.Name, $reportIndex, $reportCount) $reportIndex
+                    continue
+                }
 
-            $hostCounts = @{}
-            foreach ($matchRow in $matchTable.Rows) {
+                $hostCounts = @{}
+                foreach ($matchRow in $matchTable.Rows) {
                 $matchHash = ConvertTo-ReportString -Value $matchRow['pluginHash']
                 if (-not $matchHash) {
                     continue
@@ -321,7 +328,7 @@ function Export-PSNessusReportMatrix {
                 }
             }
 
-            $sortedHashes = $metadataMap.Keys |
+                $sortedHashes = $metadataMap.Keys |
                 Sort-Object -Property @{
                         Expression = {
                             if ($hostCounts.ContainsKey($_)) {
@@ -337,10 +344,10 @@ function Export-PSNessusReportMatrix {
                         Descending = $false
                     }
 
-            $findingsMap = [ordered]@{}
-            $rowNumber = 0
+                $findingsMap = [ordered]@{}
+                $rowNumber = 0
 
-            foreach ($hash in $sortedHashes) {
+                foreach ($hash in $sortedHashes) {
                 $rowNumber++
                 $findingsMap[$hash] = [pscustomobject]@{
                     RowNumber = $rowNumber
@@ -348,14 +355,14 @@ function Export-PSNessusReportMatrix {
                 }
             }
 
-            $hostMap = @{}
-            for ($index = 0; $index -lt $hosts.Count; $index++) {
-                $hostMap[[string]$hosts[$index].Id] = $index + 1
-            }
+                $hostMap = @{}
+                for ($index = 0; $index -lt $hosts.Count; $index++) {
+                    $hostMap[[string]$hosts[$index].Id] = $index + 1
+                }
 
-            $worksheet = $workbook.Worksheets.Add()
+                $worksheet = $workbook.Worksheets.Add()
 
-            try {
+                try {
                 $worksheetName = Get-SafeWorksheetName -DesiredName $resolvedDefinition.Name -ExistingNames $worksheetNames
                 $null = $worksheetNames.Add($worksheetName)
                 $worksheet.Name = $worksheetName
@@ -387,12 +394,20 @@ function Export-PSNessusReportMatrix {
 
                 & $updateOverallProgress ("Completed {0} ({1}/{2})" -f $resolvedDefinition.Name, $reportIndex, $reportCount) $reportIndex
                 $processedSheets++
-            }
-            finally {
-                if ($worksheet) {
-                    Remove-ExcelComObject -Reference $worksheet
-                    $worksheet = $null
                 }
+                finally {
+                    if ($worksheet) {
+                        Remove-ExcelComObject -Reference $worksheet
+                        $worksheet = $null
+                    }
+                }
+            }
+            catch {
+                $failedReportName = if ($activeReportName) { $activeReportName } else { "Index $activeReportIndex" }
+                $message = "Failed while building report matrix for '$failedReportName' ($activeReportIndex/$reportCount)."
+                Write-Error $message
+                Write-Verbose $_.Exception.ToString()
+                throw "$message $($_.Exception.Message)"
             }
         }
 
@@ -413,24 +428,55 @@ function Export-PSNessusReportMatrix {
             $null = $excel.Quit()
         }
     }
+    catch {
+        $contextReport = if ($activeReportName) { $activeReportName } else { '<initialization>' }
+        $message = "Export-PSNessusReportMatrix failed. ActiveReport='$contextReport', OutputPath='$resolvedOutputPath', Provider='$Provider'."
+        Write-Error $message
+        Write-Verbose $_.Exception.ToString()
+        throw "$message $($_.Exception.Message)"
+    }
     finally {
         if ($worksheet) {
-            Remove-ExcelComObject -Reference $worksheet
+            try {
+                Remove-ExcelComObject -Reference $worksheet
+            }
+            catch {
+                Write-Warning ("Failed to release worksheet COM object: {0}" -f $_.Exception.Message)
+                Write-Verbose $_.Exception.ToString()
+            }
         }
 
         if ($workbook) {
-            Remove-ExcelComObject -Reference $workbook
+            try {
+                Remove-ExcelComObject -Reference $workbook
+            }
+            catch {
+                Write-Warning ("Failed to release workbook COM object: {0}" -f $_.Exception.Message)
+                Write-Verbose $_.Exception.ToString()
+            }
         }
 
         if ($excel) {
-            Remove-ExcelComObject -Reference $excel
+            try {
+                Remove-ExcelComObject -Reference $excel
+            }
+            catch {
+                Write-Warning ("Failed to release Excel COM object: {0}" -f $_.Exception.Message)
+                Write-Verbose $_.Exception.ToString()
+            }
         }
 
         [System.GC]::Collect()
         [System.GC]::WaitForPendingFinalizers()
 
         if ($context) {
-            Close-PSNessusDbContext -Context $context
+            try {
+                Close-PSNessusDbContext -Context $context
+            }
+            catch {
+                Write-Warning ("Failed to close report matrix DB context for '{0}': {1}" -f $resolvedDatabasePath, $_.Exception.Message)
+                Write-Verbose $_.Exception.ToString()
+            }
         }
 
         if ($overallProgressId) {
@@ -439,6 +485,117 @@ function Export-PSNessusReportMatrix {
     }
 
     return $results.ToArray()
+}
+
+function Assert-ReportMatrixDataTable {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [object]$Data,
+
+        [Parameter(Mandatory)]
+        [string]$ContextLabel,
+
+        [Parameter(Mandatory)]
+        [string]$Provider,
+
+        [Parameter(Mandatory)]
+        [string]$Sql
+    )
+
+    if ($Data -isnot [System.Data.DataTable]) {
+        $message = "Expected System.Data.DataTable for $ContextLabel (provider '$Provider'), got '$($Data.GetType().FullName)'. SQL: $Sql"
+        Write-Error $message
+        throw $message
+    }
+
+    return $Data
+}
+
+function Test-ReportMatrixSqlFragment {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Fragment,
+
+        [Parameter(Mandatory)]
+        [string]$Label,
+
+        [Parameter(Mandatory)]
+        [string]$ReportName,
+
+        [Parameter(Mandatory)]
+        [int]$Index
+    )
+
+    $trimmed = $Fragment.Trim()
+    if ([string]::IsNullOrWhiteSpace($trimmed)) {
+        throw "Report definition #$Index ('$ReportName') has an empty $Label fragment."
+    }
+
+    if ($trimmed.Contains(';')) {
+        throw "Report definition #$Index ('$ReportName') contains ';' in $Label. Statements must be single-fragment SQL."
+    }
+
+    if ($trimmed -match '--' -or $trimmed -match '/\*' -or $trimmed -match '\*/') {
+        throw "Report definition #$Index ('$ReportName') contains SQL comment tokens in $Label, which are not supported."
+    }
+
+    $dangerousKeywords = '(?i)\b(insert|update|delete|drop|alter|create|attach|detach|pragma|execute|exec|merge)\b'
+    if ($trimmed -match $dangerousKeywords) {
+        throw "Report definition #$Index ('$ReportName') contains unsupported SQL keyword(s) in $Label."
+    }
+}
+
+function Test-ReportMatrixColumnsFragment {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Columns,
+
+        [Parameter(Mandatory)]
+        [string]$ReportName,
+
+        [Parameter(Mandatory)]
+        [int]$Index
+    )
+
+    $tokens = $Columns.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+    if ($tokens.Count -eq 0) {
+        throw "Report definition #$Index ('$ReportName') produced no usable column tokens from Columns."
+    }
+
+    foreach ($token in $tokens) {
+        $allowedPattern = '^[A-Za-z0-9_\.\[\]:"''\-\s\(\)]+$'
+        if ($token -notmatch $allowedPattern) {
+            throw "Report definition #$Index ('$ReportName') has unsupported characters in Columns token '$token'."
+        }
+    }
+}
+
+function Validate-ReportDefinitionSql {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [int]$Index,
+
+        [Parameter(Mandatory)]
+        [string]$ReportName,
+
+        [Parameter(Mandatory)]
+        [string]$PluginHash,
+
+        [Parameter(Mandatory)]
+        [string]$Columns,
+
+        [Parameter(Mandatory)]
+        [string]$WhereClause
+    )
+
+    Test-ReportMatrixSqlFragment -Fragment $PluginHash -Label 'pluginHash' -ReportName $ReportName -Index $Index
+    Test-ReportMatrixSqlFragment -Fragment $Columns -Label 'Columns' -ReportName $ReportName -Index $Index
+    Test-ReportMatrixSqlFragment -Fragment $WhereClause -Label 'whereClause' -ReportName $ReportName -Index $Index
+    Test-ReportMatrixColumnsFragment -Columns $Columns -ReportName $ReportName -Index $Index
 }
 
 function Resolve-ReportDefinition {
@@ -472,10 +629,19 @@ function Resolve-ReportDefinition {
     $pluginHash = [string]$Definition.pluginHash
     $columns = [string]$Definition.Columns
     $whereClause = [string]$Definition.whereClause
+    $resolvedName = $name.Trim()
+
+    try {
+        Validate-ReportDefinitionSql -Index $Index -ReportName $resolvedName -PluginHash $pluginHash -Columns $columns -WhereClause $whereClause
+    }
+    catch {
+        Write-Warning ("Report definition preflight failed for '{0}' (index {1}): {2}" -f $resolvedName, $Index, $_.Exception.Message)
+        throw
+    }
 
     return [pscustomobject]@{
         Title      = $title.Trim()
-        Name       = $name.Trim()
+        Name       = $resolvedName
         PluginHash = $pluginHash.Trim()
         Columns    = $columns.Trim()
         WhereClause = $whereClause.Trim()
@@ -524,6 +690,7 @@ WHERE ($($Definition.WhereClause));
 "@
 
     $data = Get-PSNessusDbData -Context $Context -Sql $sql
+    $data = Assert-ReportMatrixDataTable -Data $data -ContextLabel 'Get-ReportMatrixHosts' -Provider $Context.Provider -Sql $sql
 
     $hosts = @()
     foreach ($row in $data.Rows) {
@@ -582,7 +749,8 @@ LEFT JOIN HostTags ON HostTags.HostID = Hosts.ID
 WHERE ($($Definition.WhereClause));
 "@
 
-    return Get-PSNessusDbData -Context $Context -Sql $sql
+    $data = Get-PSNessusDbData -Context $Context -Sql $sql
+    return (Assert-ReportMatrixDataTable -Data $data -ContextLabel 'Get-ReportMatrixColumns' -Provider $Context.Provider -Sql $sql)
 }
 
 function Get-ReportMatrixMatches {
@@ -604,7 +772,8 @@ LEFT JOIN HostTags ON HostTags.HostID = Hosts.ID
 WHERE ($($Definition.WhereClause));
 "@
 
-    return Get-PSNessusDbData -Context $Context -Sql $sql
+    $data = Get-PSNessusDbData -Context $Context -Sql $sql
+    return (Assert-ReportMatrixDataTable -Data $data -ContextLabel 'Get-ReportMatrixMatches' -Provider $Context.Provider -Sql $sql)
 }
 
 function Get-ReportMatrixOutputs {
@@ -627,6 +796,7 @@ WHERE ($($Definition.WhereClause));
 "@
 
     $data = Get-PSNessusDbData -Context $Context -Sql $sql
+    $data = Assert-ReportMatrixDataTable -Data $data -ContextLabel 'Get-ReportMatrixOutputs' -Provider $Context.Provider -Sql $sql
     $lookup = @{}
 
     foreach ($row in $data.Rows) {
@@ -681,6 +851,10 @@ function Resolve-FullColumnValue {
         [switch]$PreserveWhitespace
     )
 
+    if ($ColumnName -notmatch '^[A-Za-z0-9_\.\[\]:"''\-]+$') {
+        throw "Unsupported metadata column identifier '$ColumnName' in Resolve-FullColumnValue."
+    }
+
     $provider = $Context.Provider
     $escapedHash = ConvertTo-PSNessusDbValue -Value $PluginHash -Provider $provider
 
@@ -707,6 +881,7 @@ LIMIT 1;
     }
 
     $data = Get-PSNessusDbData -Context $Context -Sql $sql
+    $data = Assert-ReportMatrixDataTable -Data $data -ContextLabel 'Resolve-FullColumnValue' -Provider $Context.Provider -Sql $sql
     if ($data.Rows.Count -eq 0) {
         return ''
     }

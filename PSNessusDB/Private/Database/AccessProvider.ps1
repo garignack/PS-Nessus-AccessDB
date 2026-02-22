@@ -577,20 +577,34 @@ function New-PSNessusDbContext {
                 }
             }
             catch {
-                # ignore cache load failures; logging will handle missing entries
+                Write-Warning ("Plugin cache preload failed for Access database '{0}': {1}" -f $resolvedPath, $_.Exception.Message)
+                Write-Verbose $_.Exception.ToString()
+            }
+            finally {
+                if ($pluginReader) {
+                    try {
+                        $pluginReader.Close()
+                    }
+                    catch {
+                        Write-Verbose ("Failed to close Access plugin cache reader for '{0}': {1}" -f $resolvedPath, $_.Exception.Message)
+                    }
                 }
-              finally {
-                  if ($pluginReader) {
-                      $pluginReader.Close()
-                  }
-              }
+                if ($command) {
+                    try {
+                        $command.Dispose()
+                    }
+                    catch {
+                        Write-Verbose ("Failed to dispose Access plugin cache command for '{0}': {1}" -f $resolvedPath, $_.Exception.Message)
+                    }
+                }
+            }
 
-              Add-Member -InputObject $context -NotePropertyName PluginCache -NotePropertyValue $pluginCache -Force
-              Add-Member -InputObject $context -NotePropertyName Transaction -NotePropertyValue $null -Force
-              return $context
-          }
-          'SQLite' {
-              Import-PSNessusSqliteModule
+            Add-Member -InputObject $context -NotePropertyName PluginCache -NotePropertyValue $pluginCache -Force
+            Add-Member -InputObject $context -NotePropertyName Transaction -NotePropertyValue $null -Force
+            return $context
+        }
+        'SQLite' {
+            Import-PSNessusSqliteModule
 
             $isNewDatabase = $NewDb -or -not (Test-Path -LiteralPath $resolvedPath)
             if ($isNewDatabase) {
@@ -653,7 +667,8 @@ function New-PSNessusDbContext {
                     }
                 }
                 catch {
-                    # ignore cache load failures; logging will handle missing entries
+                    Write-Warning ("Plugin cache preload failed for SQLite database '{0}': {1}" -f $resolvedPath, $_.Exception.Message)
+                    Write-Verbose $_.Exception.ToString()
                 }
 
                 Add-Member -InputObject $context -NotePropertyName PluginCache -NotePropertyValue $pluginCache -Force
@@ -684,18 +699,40 @@ function Close-PSNessusDbContext {
     if ($Context.PSObject.Properties.Name -contains 'Transaction') {
         $transaction = $Context.Transaction
         if ($transaction) {
-            try { $transaction.Rollback() } catch {}
-            try { $transaction.Dispose() } catch {}
+            try {
+                $transaction.Rollback()
+            }
+            catch {
+                Write-Verbose ("Failed to rollback active transaction while closing context '{0}' ({1}): {2}" -f $Context.Path, $Context.Provider, $_.Exception.Message)
+            }
+            try {
+                $transaction.Dispose()
+            }
+            catch {
+                Write-Verbose ("Failed to dispose active transaction while closing context '{0}' ({1}): {2}" -f $Context.Path, $Context.Provider, $_.Exception.Message)
+            }
             $Context.Transaction = $null
         }
     }
 
     if ($Context.Provider -eq 'Access' -and $Context.Connection) {
-        $Context.Connection.Close()
+        try {
+            $Context.Connection.Close()
+        }
+        catch {
+            Write-Warning ("Failed to close Access connection '{0}': {1}" -f $Context.Path, $_.Exception.Message)
+            Write-Verbose $_.Exception.ToString()
+        }
         $Context.Connection = $null
     }
     elseif ($Context.Provider -eq 'SQLite' -and $Context.Connection) {
-        Close-PSNessusSqliteConnection -Connection $Context.Connection
+        try {
+            Close-PSNessusSqliteConnection -Connection $Context.Connection
+        }
+        catch {
+            Write-Warning ("Failed to close SQLite connection '{0}': {1}" -f $Context.Path, $_.Exception.Message)
+            Write-Verbose $_.Exception.ToString()
+        }
         $Context.Connection = $null
     }
 }
@@ -821,15 +858,29 @@ function Get-PSNessusDbData {
 
     switch ($Context.Provider) {
         'Access' {
-            return ,(Invoke-AccessQuery -Sql $Sql -Connection $Context.Connection)
+            $data = Invoke-AccessQuery -Sql $Sql -Connection $Context.Connection
         }
         'SQLite' {
-            return Invoke-SqliteQuery -Sql $Sql -Connection $Context.Connection
+            $data = Invoke-SqliteQuery -Sql $Sql -Connection $Context.Connection
         }
         default {
             throw "Unsupported provider '$($Context.Provider)'."
         }
     }
+
+    if ($data -is [object[]] -and $data.Count -eq 1 -and $data[0] -is [System.Data.DataTable]) {
+        $data = $data[0]
+    }
+
+    if ($data -isnot [System.Data.DataTable]) {
+        $actualType = if ($null -eq $data) { '<null>' } else { $data.GetType().FullName }
+        $message = "Query result type mismatch for provider '$($Context.Provider)'. Expected System.Data.DataTable, got '$actualType'. SQL: $Sql"
+        Write-Error $message
+        throw $message
+    }
+
+    Write-Output -NoEnumerate $data
+    return
 }
 
 function Ensure-PSNessusDbColumns {

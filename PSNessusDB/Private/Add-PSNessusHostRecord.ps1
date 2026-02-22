@@ -19,7 +19,13 @@ function Add-PSNessusHostRecord {
         [int]$FileId,
 
         [Parameter()]
-        [psobject]$Logger
+        [psobject]$Logger,
+
+        [Parameter()]
+        [int]$HostIndex = 0,
+
+        [Parameter()]
+        [string]$SourcePath
     )
 
     if (-not $Logger) {
@@ -43,6 +49,7 @@ function Add-PSNessusHostRecord {
     $hostValues = @($FileId, $XmlHost.ReportHost.name)
     $enumeratedPorts = @()
     $hostTags = @()
+    $hostIdentity = if ($XmlHost.ReportHost.name) { [string]$XmlHost.ReportHost.name } else { "HostIndex:$HostIndex" }
 
     Invoke-Logger -Logger $Logger -Method 'Info' -Message ("Importing host '{0}'" -f $XmlHost.ReportHost.name) -Source $logSource
 
@@ -66,7 +73,16 @@ function Add-PSNessusHostRecord {
                 $tagName = [string]$tag.name
                 $tagValue = [string]$tag.'#text'
                 if ([string]::IsNullOrWhiteSpace($tagName)) {
+                    $tagValuePreview = if ([string]::IsNullOrWhiteSpace($tagValue)) { '<empty>' } else { ($tagValue -replace '\s+', ' ').Trim() }
+                    if ($tagValuePreview.Length -gt 80) {
+                        $tagValuePreview = $tagValuePreview.Substring(0, 80)
+                    }
+                    Invoke-Logger -Logger $Logger -Method 'Warn' -Message ("Skipping host tag with empty name. Host='{0}', HostIndex='{1}', Provider='{2}', Table='HostTags', SourcePath='{3}', TagValuePreview='{4}'." -f $hostIdentity, $HostIndex, $DbContext.Provider, $SourcePath, $tagValuePreview) -Source $logSource
                     continue
+                }
+
+                if ($null -eq $tagValue) {
+                    $tagValue = ''
                 }
                 if ($preserveTags -contains $tagName.ToLowerInvariant()) {
                     $hostColumns += $tagName
@@ -128,6 +144,11 @@ function Add-PSNessusHostRecord {
         $pluginValues += $pluginHash
 
         $existingPlugin = Get-PSNessusDbData -Context $DbContext -Sql "SELECT ID, PluginHash FROM PluginInfo WHERE PluginHash = '$pluginHash';"
+        if ($existingPlugin -isnot [System.Data.DataTable]) {
+            $message = "Plugin lookup did not return DataTable. Host='$hostIdentity', HostIndex='$HostIndex', Provider='$($DbContext.Provider)', SQL='SELECT ID, PluginHash FROM PluginInfo WHERE PluginHash = ''$pluginHash'';'"
+            Invoke-Logger -Logger $Logger -Method 'Error' -Message $message -Source $logSource
+            throw $message
+        }
         $existingPluginId = $null
         if ($pluginCache.ContainsKey($pluginHash)) {
             $existingPluginId = [int]$pluginCache[$pluginHash]

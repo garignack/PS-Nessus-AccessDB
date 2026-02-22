@@ -282,6 +282,18 @@ function Invoke-PSNessusSqliteToAccessExport {
         return [pscustomobject]$summary
     }
     catch {
+        $errorMessage = "SQLite-to-Access export failed after partial progress: Files={0}, Hosts={1}, PluginInfo={2}, ReportItem={3}, HostTags={4}, HostEnumeratedPorts={5}. Source='{6}', Target='{7}'." -f `
+            $summary.Files, $summary.Hosts, $summary.PluginInfo, $summary.ReportItem, $summary.HostTags, $summary.HostEnumeratedPorts, $SourceContext.Path, $TargetContext.Path
+
+        if ($Logger) {
+            Invoke-Logger -Logger $Logger -Method 'Error' -Message $errorMessage -Source 'SQLiteToAccessExport' -ErrorRecord $_
+            Invoke-Logger -Logger $Logger -Method 'Debug' -Message $_.Exception.ToString() -Source 'SQLiteToAccessExport'
+        }
+        else {
+            Write-Error $errorMessage
+            Write-Verbose $_.Exception.ToString()
+        }
+
         if ($transactionActive) {
             Rollback-PSNessusDbTransaction -Context $TargetContext
             $transactionActive = $false

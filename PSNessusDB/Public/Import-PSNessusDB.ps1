@@ -70,6 +70,12 @@ function Import-PSNessusDB {
         catch {
             $LogFileName = Join-Path ([System.IO.Path]::GetTempPath()) ("{0}.log" -f [System.IO.Path]::GetFileNameWithoutExtension($resolvedDatabasePath))
             Write-Warning "Error creating log file, results will be logged to: $LogFileName"
+            try {
+                Switch-LogFile -Name $LogFileName
+            }
+            catch {
+                Write-Warning ("Unable to switch to fallback log file '{0}': {1}" -f $LogFileName, $_.Exception.Message)
+            }
         }
 
         [int]$loggingLevel = $GLOBAL:LogLevel
@@ -84,7 +90,7 @@ function Import-PSNessusDB {
             $script:ImportLog.Debug("Resolved database path: $resolvedDatabasePath | Provider: $Provider | Logging level: $loggingLevel")
         }
         catch {
-            Write-Host 'Error Creating PS-Log Object'
+            Write-Error 'Error creating PS-Log object.'
             Write-Error $_.Exception.ToString()
             throw
         }
@@ -197,7 +203,7 @@ function Import-PSNessusDB {
                     Start-PSNessusDbTransaction -Context $script:DbContext | Out-Null
                     $transactionActive = $true
 
-                    Add-PSNessusHostRecord -XmlHost $xmlHost -DbContext $script:DbContext -FileId $fileId -Logger $script:ImportLog
+                    Add-PSNessusHostRecord -XmlHost $xmlHost -DbContext $script:DbContext -FileId $fileId -Logger $script:ImportLog -HostIndex $hostEntry.Index -SourcePath $resolvedFullName
 
                     Complete-PSNessusDbTransaction -Context $script:DbContext
                     $transactionActive = $false
