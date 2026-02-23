@@ -49,6 +49,27 @@ Export-PSNessusReportMatrix `
 ```
 - Each populated definition becomes a worksheet; skipped definitions emit verbose messages.
 
+### Export Tag Matrix (No JSON)
+```powershell
+Export-PSNessusTagMatrix `
+    -DatabasePath .\.testoutputs\nessus.sqlite `
+    -Provider SQLite `
+    -OutputPath .\.testoutputs\TagMatrix.xlsx `
+    -Force -Verbose
+```
+- Rows are built from `HostTags.TagName`.
+- Host cells are filled with `HostTags.TagValue`.
+- Omitting `-Tags` includes all tags.
+
+```powershell
+Export-PSNessusTagMatrix `
+    -DatabasePath .\.testoutputs\nessus.sqlite `
+    -Provider SQLite `
+    -Tags @('Credentialed_Scan', 'HOST_END_TIMESTAMP') `
+    -OutputPath .\.testoutputs\TagMatrix-Filtered.xlsx `
+    -Force -Verbose
+```
+
 ### Bridge to Access (Optional)
 ```powershell
 Export-PSNessusAccessDatabase `
@@ -65,6 +86,7 @@ Export-PSNessusAccessDatabase `
 2. **SQLite** is the system of record. Schema bootstrap comes from `schema_sqlite.sql` and PRAGMAs (`WAL`, `foreign_keys`) are applied on first run.
 3. **Export-PSNessusAccessDatabase** mirrors the SQLite contents into an Access copy, remapping IDs so relationships, lookups, and macros defined in the template continue to function.
 4. **Export-PSNessusReportMatrix** runs cross-table queries (SQLite or Access) defined via JSON, turning findings into analyst-friendly Excel matrices.
+5. **Export-PSNessusTagMatrix** builds a host-tag matrix directly from `HostTags` without requiring a report definition JSON.
 
 ## Project Conventions
 - All transient outputs, logs, and test artefacts belong under `.testoutputs\`.

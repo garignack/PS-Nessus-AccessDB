@@ -60,12 +60,12 @@ function Invoke-PSNessusSqliteToAccessExport {
             foreach ($column in $fileColumns) {
                 $value = $row[$column]
                 if ($value -is [System.DBNull]) {
-                    $values += $null
+                    $values += ,$null
                     continue
                 }
 
                 if ($column -eq 'ImportDate') {
-                    $parsedImportDate = $null
+                    [datetime]$parsedImportDate = [datetime]::MinValue
                     if ([datetime]::TryParse([string]$value, [ref]$parsedImportDate)) {
                         $values += $parsedImportDate
                     }
@@ -97,7 +97,7 @@ function Invoke-PSNessusSqliteToAccessExport {
             foreach ($column in $hostColumns) {
                 $value = $row[$column]
                 if ($value -is [System.DBNull]) {
-                    $values += $null
+                    $values += ,$null
                     continue
                 }
 
@@ -134,7 +134,7 @@ function Invoke-PSNessusSqliteToAccessExport {
             foreach ($column in $pluginColumns) {
                 $value = $row[$column]
                 if ($value -is [System.DBNull]) {
-                    $values += $null
+                    $values += ,$null
                     continue
                 }
 
@@ -169,7 +169,7 @@ function Invoke-PSNessusSqliteToAccessExport {
             foreach ($column in $portColumns) {
                 $value = $row[$column]
                 if ($value -is [System.DBNull]) {
-                    $values += $null
+                    $values += ,$null
                     continue
                 }
 
@@ -199,7 +199,7 @@ function Invoke-PSNessusSqliteToAccessExport {
             foreach ($column in $tagColumns) {
                 $value = $row[$column]
                 if ($value -is [System.DBNull]) {
-                    $values += $null
+                    $values += ,$null
                     continue
                 }
 
@@ -230,7 +230,7 @@ function Invoke-PSNessusSqliteToAccessExport {
             foreach ($column in $reportColumns) {
                 $value = $row[$column]
                 if ($value -is [System.DBNull]) {
-                    $values += $null
+                    $values += ,$null
                     continue
                 }
 
@@ -292,6 +292,9 @@ function Invoke-PSNessusSqliteToAccessExport {
         else {
             Write-Error $errorMessage
             Write-Verbose $_.Exception.ToString()
+            if ($_.ScriptStackTrace) {
+                Write-Verbose $_.ScriptStackTrace
+            }
         }
 
         if ($transactionActive) {

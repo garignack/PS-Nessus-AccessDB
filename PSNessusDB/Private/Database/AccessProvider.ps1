@@ -96,6 +96,7 @@ function Invoke-AccessInsert {
         [string[]]$Columns,
 
         [Parameter(Mandatory)]
+        [AllowNull()]
         [object[]]$Values,
 
         [Parameter(Mandatory)]
@@ -130,7 +131,74 @@ function Invoke-AccessInsert {
                     $parameter.Value = [DBNull]::Value
                 }
                 else {
-                    $parameter.Value = $Values[$index]
+                    switch ($value.GetType().FullName) {
+                        'System.DateTime' {
+                            $dateValue = [datetime]$value
+                            # Access inserts fail when DBTimeStamp parameters include sub-second precision.
+                            $dateValue = $dateValue.AddTicks(-($dateValue.Ticks % [TimeSpan]::TicksPerSecond))
+                            $parameter.OleDbType = [System.Data.OleDb.OleDbType]::DBTimeStamp
+                            $parameter.Value = $dateValue
+                            break
+                        }
+                        'System.Int16' {
+                            $parameter.OleDbType = [System.Data.OleDb.OleDbType]::SmallInt
+                            $parameter.Value = [int16]$value
+                            break
+                        }
+                        'System.Int32' {
+                            $parameter.OleDbType = [System.Data.OleDb.OleDbType]::Integer
+                            $parameter.Value = [int]$value
+                            break
+                        }
+                        'System.Int64' {
+                            $longValue = [long]$value
+                            if ($longValue -ge [int]::MinValue -and $longValue -le [int]::MaxValue) {
+                                $parameter.OleDbType = [System.Data.OleDb.OleDbType]::Integer
+                                $parameter.Value = [int]$longValue
+                            }
+                            else {
+                                $parameter.OleDbType = [System.Data.OleDb.OleDbType]::Double
+                                $parameter.Value = [double]$longValue
+                            }
+                            break
+                        }
+                        'System.Boolean' {
+                            $parameter.OleDbType = [System.Data.OleDb.OleDbType]::Boolean
+                            $parameter.Value = [bool]$value
+                            break
+                        }
+                        'System.Decimal' {
+                            $parameter.OleDbType = [System.Data.OleDb.OleDbType]::Decimal
+                            $parameter.Value = [decimal]$value
+                            break
+                        }
+                        'System.Double' {
+                            $parameter.OleDbType = [System.Data.OleDb.OleDbType]::Double
+                            $parameter.Value = [double]$value
+                            break
+                        }
+                        'System.Single' {
+                            $parameter.OleDbType = [System.Data.OleDb.OleDbType]::Single
+                            $parameter.Value = [single]$value
+                            break
+                        }
+                        'System.Byte[]' {
+                            $parameter.OleDbType = [System.Data.OleDb.OleDbType]::VarBinary
+                            $parameter.Value = [byte[]]$value
+                            break
+                        }
+                        default {
+                            $stringValue = [string]$value
+                            if ($stringValue.Length -gt 255) {
+                                $parameter.OleDbType = [System.Data.OleDb.OleDbType]::LongVarWChar
+                            }
+                            else {
+                                $parameter.OleDbType = [System.Data.OleDb.OleDbType]::VarWChar
+                            }
+                            $parameter.Value = $stringValue
+                            break
+                        }
+                    }
                 }
                 [void]$insertCommand.Parameters.Add($parameter)
             }
@@ -155,10 +223,12 @@ function Invoke-AccessInsert {
     }
     catch {
         Write-Warning "Error inserting data into $Table"
+        Write-Warning "SQL: $insertSql"
         Write-Warning $_.Exception.Message
 
         for ($index = 0; $index -lt $Columns.Count; $index++) {
-            Write-Host "   [$($Columns[$index])]: $($Values[$index])"
+            $valueType = if ($null -eq $Values[$index]) { '<null>' } else { $Values[$index].GetType().FullName }
+            Write-Host "   [$($Columns[$index])]: $($Values[$index]) (Type: $valueType)"
         }
 
         throw
@@ -175,10 +245,13 @@ function Ensure-AccessColumns {
         [string[]]$Columns,
 
         [Parameter(Mandatory)]
+        [AllowNull()]
         [object[]]$Values,
 
         [Parameter(Mandatory)]
         [System.Data.OleDb.OleDbConnection]$Connection
+        ,
+        [System.Data.OleDb.OleDbTransaction]$Transaction
     )
 
     $existingColumns = $Connection.GetSchema("Columns") |
@@ -200,6 +273,9 @@ function Ensure-AccessColumns {
 
         try {
             $alterCommand = New-Object System.Data.OleDb.OleDbCommand($alterSql, $Connection)
+            if ($PSBoundParameters.ContainsKey('Transaction') -and $Transaction) {
+                $alterCommand.Transaction = $Transaction
+            }
             $null = $alterCommand.ExecuteNonQuery()
             $existingColumns += $column
         }
@@ -267,7 +343,7 @@ function Invoke-SqliteInsert {
     param(
         [Parameter(Mandatory)][string]$Table,
         [Parameter(Mandatory)][string[]]$Columns,
-        [Parameter(Mandatory)][object[]]$Values,
+        [Parameter(Mandatory)][AllowNull()][object[]]$Values,
         [Parameter(Mandatory)][System.Data.SQLite.SQLiteConnection]$Connection,
         [System.Data.SQLite.SQLiteTransaction]$Transaction
     )
@@ -298,7 +374,7 @@ function Ensure-SqliteColumns {
     param(
         [Parameter(Mandatory)][string]$Table,
         [Parameter(Mandatory)][string[]]$Columns,
-        [Parameter(Mandatory)][object[]]$Values,
+        [Parameter(Mandatory)][AllowNull()][object[]]$Values,
         [Parameter(Mandatory)][System.Data.SQLite.SQLiteConnection]$Connection
     )
 
@@ -468,6 +544,7 @@ function Set-AccessRecord {
         [string[]]$Columns,
 
         [Parameter(Mandatory)]
+        [AllowNull()]
         [object[]]$Values,
 
         [Parameter(Mandatory)]
@@ -830,6 +907,7 @@ function Add-PSNessusDbRecord {
         [string[]]$Columns,
 
         [Parameter(Mandatory)]
+        [AllowNull()]
         [object[]]$Values
     )
 
@@ -896,12 +974,13 @@ function Ensure-PSNessusDbColumns {
         [string[]]$Columns,
 
         [Parameter(Mandatory)]
+        [AllowNull()]
         [object[]]$Values
     )
 
     switch ($Context.Provider) {
         'Access' {
-            Ensure-AccessColumns -Table $Table -Columns $Columns -Values $Values -Connection $Context.Connection
+            Ensure-AccessColumns -Table $Table -Columns $Columns -Values $Values -Connection $Context.Connection -Transaction $Context.Transaction
             break
         }
         'SQLite' {

@@ -66,7 +66,7 @@ NestedModules = @(
 )
 
 # Functions to export from this module
-FunctionsToExport = @('Import-PSNessusDB', 'Export-PSNessusReportMatrix', 'Export-PSNessusAccessDatabase')
+FunctionsToExport = @('Import-PSNessusDB', 'Export-PSNessusReportMatrix', 'Export-PSNessusTagMatrix', 'Export-PSNessusAccessDatabase')
 
 # Cmdlets to export from this module
 CmdletsToExport = @()
@@ -88,6 +88,7 @@ FileList = @(
     '.\PS-Sqlite.psm1'
     '.\Public\Import-PSNessusDB.ps1'
     '.\Public\Export-PSNessusReportMatrix.ps1'
+    '.\Public\Export-PSNessusTagMatrix.ps1'
     '.\Public\Export-PSNessusAccessDatabase.ps1'
     '.\Private\Add-PSNessusHostRecord.ps1'
     '.\Private\Database\AccessProvider.ps1'
